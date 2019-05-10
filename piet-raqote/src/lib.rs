@@ -1,8 +1,10 @@
 //! The Raqote backend for the Piet 2D graphics abstraction.
 
-use raqote::{DrawTarget, Source, SolidSource, PathBuilder};
+use raqote::{DrawTarget, PathBuilder, SolidSource, Source, Winding};
 
 use kurbo::{Affine, PathEl, QuadBez, Rect, Shape, Vec2};
+
+use euclid::{Angle, Point2D, Transform2D};
 
 use piet::{
     new_error, Error, ErrorKind, FillRule, Font, FontBuilder, Gradient, GradientStop, ImageFormat,
@@ -10,20 +12,36 @@ use piet::{
     TextLayoutBuilder,
 };
 
+#[derive(Default)]
+struct CtxState {
+    transform: Affine,
+}
 
 pub struct RaqoteRenderContext<'a> {
-  draw_target: &'a mut DrawTarget,
-  // TODO: Do actual text
-  text: RaqoteText
+    draw_target: &'a mut DrawTarget,
+    ctx_stack: Vec<CtxState>,
+
+    // TODO: Do actual text
+    text: RaqoteText,
 }
 
 impl<'a> RaqoteRenderContext<'a> {
-  pub fn new(draw_target: &'a mut DrawTarget) -> RaqoteRenderContext<'a> {
-    RaqoteRenderContext {
-      draw_target,
-      text: RaqoteText
+    pub fn new(draw_target: &'a mut DrawTarget) -> RaqoteRenderContext<'a> {
+        RaqoteRenderContext {
+            draw_target,
+            text: RaqoteText,
+            ctx_stack: vec![CtxState::default()],
+        }
     }
-  }
+
+    fn current_transform(&self) -> Affine {
+        // This is an unwrap because we protect the invariant.
+        self.ctx_stack.last().unwrap().transform
+    }
+
+    fn pop_state(&mut self) {
+        self.ctx_stack.pop();
+    }
 }
 
 pub struct RaqoteText;
@@ -37,7 +55,12 @@ pub struct RaqoteTextLayout;
 pub struct RaqoteTextLayoutBuilder;
 
 fn split_rgba(rgba: u32) -> (u8, u8, u8, u8) {
-    ((rgba >> 24) as u8, ((rgba >> 16) & 255) as u8, ((rgba >> 8) & 255) as u8, (rgba & 255) as u8)
+    (
+        (rgba >> 24) as u8,
+        ((rgba >> 16) & 255) as u8,
+        ((rgba >> 8) & 255) as u8,
+        (rgba & 255) as u8,
+    )
 }
 
 fn convert_line_join(line_join: LineJoin) -> raqote::LineJoin {
@@ -49,17 +72,62 @@ fn convert_line_join(line_join: LineJoin) -> raqote::LineJoin {
 }
 
 fn convert_line_cap(line_cap: LineCap) -> raqote::LineCap {
-      match line_cap {
+    match line_cap {
         LineCap::Butt => raqote::LineCap::Butt,
         LineCap::Round => raqote::LineCap::Round,
         LineCap::Square => raqote::LineCap::Square,
     }
-  
 }
 
 fn convert_dash(dash: &(Vec<f64>, f64)) -> (Vec<f32>, f32) {
     // TODO: find cheaper way to do this?
     (dash.0.iter().map(|d| *d as f32).collect(), dash.1 as f32)
+}
+
+fn affine_to_transform(affine: Affine) -> Transform2D<f32> {
+    let a = affine.as_coeffs();
+    Transform2D::row_major(
+        a[0] as f32,
+        a[1] as f32,
+        a[2] as f32,
+        a[3] as f32,
+        a[4] as f32,
+        a[5] as f32,
+    )
+}
+
+// Convert a RGBA u32 to a ARBG u32
+fn rgba_to_arbg(rgba: u32) -> u32 {
+    (rgba << 24) | (rgba >> 8)
+}
+
+// Generates a 2D transform for rendering linear gradients in Raqot
+// If Raqot is given an identity transform, it will render linear gradients from (0, 0) to (256, 0)
+// This function generates a transforms such that the linear gradient will be drawn
+// between the provided start and end points.
+//
+// TODO: Some gradients do not work as expected. Need to investigate further.
+fn linear_points_to_transform(start: Vec2, end: Vec2) -> Transform2D<f32> {
+    let gradient_vector = end - start;
+    // Move to start point
+    let translate = Transform2D::create_translation(-start.x as f32, start.y as f32);
+    // Get length of gradient vector
+    let length = gradient_vector.hypot() as f32;
+    // Linear grandients in raqot go from (0, 0) to (256, 0), this may change in the future
+    // Scaling is multiplication not division (2, not 0.5)
+    let scale = Transform2D::create_scale(256.0 / length, 256.0 / length);
+    // Get correct angle
+    let rotation = Transform2D::create_rotation(Angle::radians(gradient_vector.atan2() as f32));
+
+    translate.pre_mul(&rotation).pre_mul(&scale)
+}
+
+// Generates a 2D transform for rendering radial gradients in Raqot
+fn radial_points_to_transform(center: Vec2, _origin_offset: Vec2, radius: f32) -> Transform2D<f32> {
+    // Max distance is 32768
+    let scale = Transform2D::create_scale(128.0 / radius, 128.0 / radius);
+    let translate = Transform2D::create_translation(-center.x as f32, -center.y as f32);
+    translate.post_mul(&scale)
 }
 
 impl<'a> RenderContext for RaqoteRenderContext<'a> {
@@ -74,17 +142,43 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
     type Image = ();
 
     fn status(&mut self) -> Result<(), Error> {
-      Ok(())
+        Ok(())
     }
-    
+
     fn solid_brush(&mut self, rgba: u32) -> Result<Self::Brush, Error> {
         let (r, g, b, a) = split_rgba(rgba);
         Ok(Source::Solid(SolidSource { r, g, b, a }))
     }
 
-    fn gradient(&mut self, _gradient: Gradient) -> Result<Self::Brush, Error> {
-        // TODO: Do actual gradient
-        Ok(Source::Solid(SolidSource { r: 255, g: 255, b: 255, a: 255 }))
+    fn gradient(&mut self, gradient: Gradient) -> Result<Self::Brush, Error> {
+        match gradient {
+            Gradient::Linear(gradient) => Ok(Source::LinearGradient(
+                raqote::Gradient {
+                    stops: gradient
+                        .stops
+                        .iter()
+                        .map(|stop| raqote::GradientStop {
+                            position: stop.pos,
+                            color: rgba_to_arbg(stop.rgba),
+                        })
+                        .collect(),
+                },
+                linear_points_to_transform(gradient.start, gradient.end),
+            )),
+            Gradient::Radial(gradient) => Ok(Source::RadialGradient(
+                raqote::Gradient {
+                    stops: gradient
+                        .stops
+                        .iter()
+                        .map(|stop| raqote::GradientStop {
+                            position: stop.pos,
+                            color: rgba_to_arbg(stop.rgba),
+                        })
+                        .collect(),
+                },
+                radial_points_to_transform(gradient.center, gradient.origin_offset, gradient.radius as f32),
+            )),
+        }
     }
 
     fn clear(&mut self, _rgb: u32) {
@@ -92,7 +186,7 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         // 1. Clear command
         // 2. Expose width and height
     }
-    
+
     fn stroke(
         &mut self,
         shape: impl Shape,
@@ -106,16 +200,23 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
             match el {
                 PathEl::Moveto(p) => {
                     builder.move_to(p.x as f32, p.y as f32);
-                },
+                }
                 PathEl::Lineto(p) => {
                     builder.line_to(p.x as f32, p.y as f32);
-                },
+                }
                 PathEl::Quadto(p1, p2) => {
                     builder.quad_to(p1.x as f32, p1.y as f32, p2.x as f32, p2.y as f32);
-                },
+                }
                 PathEl::Curveto(p1, p2, p3) => {
-                    builder.cubic_to(p1.x as f32, p1.y as f32, p2.x as f32, p2.y as f32, p3.x as f32, p3.y as f32);
-                },
+                    builder.cubic_to(
+                        p1.x as f32,
+                        p1.y as f32,
+                        p2.x as f32,
+                        p2.y as f32,
+                        p3.x as f32,
+                        p3.y as f32,
+                    );
+                }
                 PathEl::Closepath => builder.close(),
             }
         }
@@ -126,7 +227,7 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
             .and_then(|style| style.line_cap)
             .map(convert_line_cap)
             .unwrap_or(raqote::LineCap::Butt);
-        
+
         let join = style
             .and_then(|style| style.line_join)
             .map(convert_line_join)
@@ -143,7 +244,7 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
             .and_then(|style| style.dash.as_ref())
             .map(convert_dash)
             .unwrap_or_else(|| (vec![], 0.0));
-        
+
         let stroke_style = raqote::StrokeStyle {
             cap,
             join,
@@ -157,13 +258,46 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
     }
 
     fn fill(&mut self, shape: impl Shape, brush: &Self::Brush, fill_rule: FillRule) {
-// TODO
+        // TODO: Expose Path in Raqote so this can be moved to a function
+        let mut builder = PathBuilder::new();
+        for el in shape.to_bez_path(1e-3) {
+            match el {
+                PathEl::Moveto(p) => {
+                    builder.move_to(p.x as f32, p.y as f32);
+                }
+                PathEl::Lineto(p) => {
+                    builder.line_to(p.x as f32, p.y as f32);
+                }
+                PathEl::Quadto(p1, p2) => {
+                    builder.quad_to(p1.x as f32, p1.y as f32, p2.x as f32, p2.y as f32);
+                }
+                PathEl::Curveto(p1, p2, p3) => {
+                    builder.cubic_to(
+                        p1.x as f32,
+                        p1.y as f32,
+                        p2.x as f32,
+                        p2.y as f32,
+                        p3.x as f32,
+                        p3.y as f32,
+                    );
+                }
+                PathEl::Closepath => builder.close(),
+            }
+        }
+        let path = builder.finish();
+
+        let winding_mode = match fill_rule {
+            FillRule::EvenOdd => Winding::EvenOdd,
+            FillRule::NonZero => Winding::NonZero,
+        };
+
+        self.draw_target.fill(&path, brush, winding_mode);
     }
-    
+
     fn clip(&mut self, shape: impl Shape, fill_rule: FillRule) {
         // TODO
     }
-    
+
     fn text(&mut self) -> &mut Self::Text {
         // TODO: Do actual text
         &mut self.text
@@ -179,25 +313,36 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
     }
 
     fn save(&mut self) -> Result<(), Error> {
+        let new_state = CtxState {
+            transform: self.current_transform(),
+        };
+        self.ctx_stack.push(new_state);
         Ok(())
     }
 
     fn restore(&mut self) -> Result<(), Error> {
+        if self.ctx_stack.len() <= 1 {
+            return Err(new_error(ErrorKind::StackUnbalance));
+        }
+        self.pop_state();
+        // Move this code into impl to avoid duplication with transform?
+        self.draw_target
+            .set_transform(&affine_to_transform(self.current_transform()));
         Ok(())
     }
 
-    fn with_save(&mut self, f: impl FnOnce(&mut Self) -> Result<(), Error>) -> Result<(), Error> {
-        self.save()?;
-        // Always try to restore the stack, even if `f` errored.
-        f(self).and(self.restore())
-    }
-
     fn finish(&mut self) -> Result<(), Error> {
-      Ok(())
+        if self.ctx_stack.len() != 1 {
+            return Err(new_error(ErrorKind::StackUnbalance));
+        }
+        self.pop_state();
+        Ok(())
     }
 
     fn transform(&mut self, transform: Affine) {
-    
+        self.ctx_stack.last_mut().unwrap().transform *= transform;
+        self.draw_target
+            .set_transform(&affine_to_transform(self.current_transform()));
     }
 
     fn make_image(
@@ -209,9 +354,14 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
     ) -> Result<Self::Image, Error> {
         Ok(())
     }
-    
-    fn draw_image(&mut self, image: &Self::Image, rect: impl Into<Rect>, interp: InterpolationMode) {
-      
+
+    fn draw_image(
+        &mut self,
+        image: &Self::Image,
+        rect: impl Into<Rect>,
+        interp: InterpolationMode,
+    ) {
+
     }
 }
 
@@ -241,17 +391,14 @@ impl Text for RaqoteText {
 }
 
 impl FontBuilder for RaqoteFontBuilder {
-  type Out = RaqoteFont;
+    type Out = RaqoteFont;
 
-  fn build(self) -> Result<Self::Out, Error> {
-    Ok(RaqoteFont)
-  }
-  
+    fn build(self) -> Result<Self::Out, Error> {
+        Ok(RaqoteFont)
+    }
 }
 
-impl Font for RaqoteFont {
-  
-}
+impl Font for RaqoteFont {}
 
 impl TextLayoutBuilder for RaqoteTextLayoutBuilder {
     type Out = RaqoteTextLayout;

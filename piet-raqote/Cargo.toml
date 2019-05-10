@@ -11,7 +11,8 @@ categories = ["rendering::graphics-api"]
 [dependencies]
 kurbo = "0.2.2"
 piet = { version = "0.0.2", path = "../piet" }
-raqote = "0.2.0"
+raqote = {git="https://github.com/cbrewster/raqote.git", branch="linear_gradient_fix"}
+euclid = "0.19.8"
 
 [dev-dependencies]
 piet-test = { version = "0.0.2", path = "../piet-test" }
