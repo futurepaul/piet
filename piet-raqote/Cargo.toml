@@ -1,0 +1,18 @@
+[package]
+name = "piet-raqote"
+version = "0.0.1"
+authors = ["Paul Miller <paul@pauljmiller.com>", "Connor Brewster <connor.brewster@eagles.oc.edu>"]
+description = "Raqote backend for piet 2D graphics abstraction."
+license = "MIT/Apache-2.0"
+edition = "2018"
+keywords = ["graphics", "2d"]
+categories = ["rendering::graphics-api"]
+
+[dependencies]
+kurbo = "0.2.2"
+piet = { version = "0.0.2", path = "../piet" }
+raqote = "0.2.0"
+
+[dev-dependencies]
+piet-test = { version = "0.0.2", path = "../piet-test" }
+image = "0.20.1"
