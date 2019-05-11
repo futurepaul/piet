@@ -12,8 +12,8 @@ pub fn draw(rc: &mut impl RenderContext) -> Result<(), Error> {
     ] {
         let mut x = 5.0;
         for &format in &[
-            ImageFormat::RgbaSeparate,
-            ImageFormat::RgbaPremul,
+            // ImageFormat::RgbaSeparate,
+            // ImageFormat::RgbaPremul,
             ImageFormat::Rgb,
         ] {
             let image_data = make_image_data(16, 16, format);

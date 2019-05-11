@@ -359,24 +359,25 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         buf: &[u8],
         format: ImageFormat,
     ) -> Result<Self::Image, Error> {
-        let mut image: Vec<u32> = Vec::new();
 
-        let buf = match format {
+        match format {
             ImageFormat::Rgb => {
+                let mut image: Vec<u32> = Vec::new();
                 for i in buf.chunks(3) {
                     image.push(
                         0xff << 24 | ((i[0] as u32) << 16) | ((i[1] as u32) << 8) | (i[2] as u32),
-                    )
-                }
+                    );
+                };
+                return Ok(Image {
+                  width: width as i32,
+                  height: height as i32,
+                  data: image,
+                })
             },
-            _ => return Err(new_error(ErrorKind::NotSupported)),
+            _ => return Err(new_error(ErrorKind::NotSupported))
         };
 
-        Ok(Image {
-            width: width as i32,
-            height: height as i32,
-            data: image,
-        })
+
     }
 
     fn draw_image(
@@ -387,8 +388,6 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
     ) {
         let rect = rect.into();
 
-        println!("drawing image");
-
         //I don't know how to get a non-reference of image other than this dumb thing
         let my_own_image = Image {
             width: image.width,
@@ -396,23 +395,28 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
             data: image.data.clone(),
         };
 
-        println!("image[0]: {:?}", my_own_image.data[0]);
+        // TODO: Expose Path in Raqote so this can be moved to a function
         let mut builder = PathBuilder::new();
-
-        //Is this correct?
-        builder.quad_to(
-            rect.x0 as f32,
-            rect.y0 as f32,
-            rect.x1 as f32,
-            rect.y1 as f32,
-        );
+        for el in rect.to_bez_path(1e-3) {
+            match el {
+                PathEl::Moveto(p) => {
+                    builder.move_to(p.x as f32, p.y as f32);
+                }
+                PathEl::Lineto(p) => {
+                    builder.line_to(p.x as f32, p.y as f32);
+                }
+                PathEl::Closepath => builder.close(),
+                _ => { println!("draw_image doesn't support {:?}", el)}
+            }
+        }
         let path = builder.finish();
 
-        //TODO which winding is appropriate here?
+        //QUESTION which winding is appropriate here?
         self.draw_target.fill(
             &path,
-            &Source::Image(my_own_image, Transform2D::create_scale(1.0, 1.0)),
-            Winding::EvenOdd,
+            //TODO figure out why scaling is off
+            &Source::Image(my_own_image, Transform2D::create_scale(0.5, 0.5)),
+            Winding::NonZero,
         );
     }
 }
