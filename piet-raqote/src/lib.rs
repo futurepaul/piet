@@ -120,7 +120,11 @@ fn linear_points_to_transform(start: Vec2, end: Vec2) -> Transform2D<f32> {
     let rotation = Transform2D::create_rotation(-Angle::radians(gradient_vector.atan2() as f32));
 
     // TODO: Move `inverse()` to Raqote
-    translate.pre_mul(&rotation).pre_mul(&scale).inverse().unwrap()
+    translate
+        .pre_mul(&rotation)
+        .pre_mul(&scale)
+        .inverse()
+        .unwrap()
 }
 
 // Generates a 2D transform for rendering radial gradients in Raqot
@@ -359,25 +363,49 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         buf: &[u8],
         format: ImageFormat,
     ) -> Result<Self::Image, Error> {
+        let mut image: Vec<u32> = Vec::new();
 
         match format {
             ImageFormat::Rgb => {
-                let mut image: Vec<u32> = Vec::new();
                 for i in buf.chunks(3) {
                     image.push(
                         0xff << 24 | ((i[0] as u32) << 16) | ((i[1] as u32) << 8) | (i[2] as u32),
                     );
-                };
-                return Ok(Image {
-                  width: width as i32,
-                  height: height as i32,
-                  data: image,
-                })
-            },
-            _ => return Err(new_error(ErrorKind::NotSupported))
+                }
+            }
+            ImageFormat::RgbaPremul => {
+                for i in buf.chunks(4) {
+                    image.push(
+                        ((i[3] as u32) << 24)
+                            | ((i[0] as u32) << 16)
+                            | ((i[1] as u32) << 8)
+                            | (i[2] as u32),
+                    )
+                }
+            }
+            ImageFormat::RgbaSeparate => {
+                fn premul(x: u8, a: u8) -> u32 {
+                    let y = (x as u16) * (a as u16);
+                    ((y + (y >> 8) + 0x80) >> 8) as u32
+                }
+                for i in buf.chunks(4) {
+                    let a = i[3];
+                    image.push(
+                        ((a as u32) << 24)
+                            | (premul(i[0], a) << 16)
+                            | (premul(i[1], a) << 8)
+                            | premul(i[2], a),
+                    )
+                }
+            }
+            _ => return Err(new_error(ErrorKind::NotSupported)),
         };
 
-
+        return Ok(Image {
+            width: width as i32,
+            height: height as i32,
+            data: image,
+        });
     }
 
     fn draw_image(
@@ -406,7 +434,7 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
                     builder.line_to(p.x as f32, p.y as f32);
                 }
                 PathEl::Closepath => builder.close(),
-                _ => { println!("draw_image doesn't support {:?}", el)}
+                _ => println!("draw_image doesn't support {:?}", el),
             }
         }
         let path = builder.finish();
