@@ -1,11 +1,12 @@
 //! The Raqote backend for the Piet 2D graphics abstraction.
 
-use raqote::{DrawTarget, PathBuilder, SolidSource, Source, Winding};
+use raqote::{DrawTarget, PathBuilder, SolidSource, Source, Winding, Transform};
 use sw_composite::Image;
 
 use kurbo::{Affine, PathEl, Rect, Shape, Vec2};
 
-use euclid::{Angle, Transform2D};
+//Euclid's Transform2D is now part of raqote, but we still need Angle
+use euclid::{Angle};
 
 use piet::{
     new_error, Error, ErrorKind, FillRule, Font, FontBuilder, Gradient, ImageFormat,
@@ -85,9 +86,9 @@ fn convert_dash(dash: &(Vec<f64>, f64)) -> (Vec<f32>, f32) {
     (dash.0.iter().map(|d| *d as f32).collect(), dash.1 as f32)
 }
 
-fn affine_to_transform(affine: Affine) -> Transform2D<f32> {
+fn affine_to_transform(affine: Affine) -> Transform {
     let a = affine.as_coeffs();
-    Transform2D::row_major(
+    Transform::row_major(
         a[0] as f32,
         a[1] as f32,
         a[2] as f32,
@@ -106,17 +107,17 @@ fn rgba_to_arbg(rgba: u32) -> u32 {
 // If Raqot is given an identity transform, it will render linear gradients from (0, 0) to (256, 0)
 // This function generates a transforms such that the linear gradient will be drawn
 // between the provided start and end points.
-fn linear_points_to_transform(start: Vec2, end: Vec2) -> Transform2D<f32> {
+fn linear_points_to_transform(start: Vec2, end: Vec2) -> Transform {
     let gradient_vector = end - start;
     // Move to start point
-    let translate = Transform2D::create_translation(start.x as f32, start.y as f32);
+    let translate = Transform::create_translation(start.x as f32, start.y as f32);
     // Get length of gradient vector
     let length = gradient_vector.hypot() as f32;
     // Linear grandients in raqot go from (0, 0) to (256, 0), this may change in the future
     // Scaling is multiplication not division (2, not 0.5)
-    let scale = Transform2D::create_scale(length / 256.0, length / 256.0);
+    let scale = Transform::create_scale(length / 256.0, length / 256.0);
     // Get correct angle
-    let rotation = Transform2D::create_rotation(-Angle::radians(gradient_vector.atan2() as f32));
+    let rotation = Transform::create_rotation(-Angle::radians(gradient_vector.atan2() as f32));
 
     // TODO: Move `inverse()` to Raqote
     translate
@@ -126,21 +127,21 @@ fn linear_points_to_transform(start: Vec2, end: Vec2) -> Transform2D<f32> {
         .unwrap()
 }
 
-fn transform_from_rect(rect: Rect) -> Transform2D<f32> {
-    let translate = Transform2D::create_translation(rect.x0 as f32, rect.y0 as f32);
+fn transform_from_rect(rect: Rect) -> Transform {
+    let translate = Transform::create_translation(rect.x0 as f32, rect.y0 as f32);
 
     // I don't think hardcoded 2 is correct but it makes the example work
-    let scale = Transform2D::create_scale(2.0, 2.0);
+    let scale = Transform::create_scale(2.0, 2.0);
 
     // TODO: Move `inverse()` to Raqote
     translate.pre_mul(&scale).inverse().unwrap()
 }
 
 // Generates a 2D transform for rendering radial gradients in Raqot
-fn radial_points_to_transform(center: Vec2, _origin_offset: Vec2, radius: f32) -> Transform2D<f32> {
+fn radial_points_to_transform(center: Vec2, _origin_offset: Vec2, radius: f32) -> Transform {
     // Max distance is 32768
-    let scale = Transform2D::create_scale(radius / 128.0, radius / 128.0);
-    let translate = Transform2D::create_translation(center.x as f32, center.y as f32);
+    let scale = Transform::create_scale(radius / 128.0, radius / 128.0);
+    let translate = Transform::create_translation(center.x as f32, center.y as f32);
 
     // TODO: Move `inverse()` to Raqote
     translate.pre_mul(&scale).inverse().unwrap()
@@ -274,7 +275,7 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
             dash_offset,
         };
 
-        self.draw_target.stroke(&path, &stroke_style, brush);
+        self.draw_target.stroke(&path, brush, &stroke_style);
     }
 
     fn fill(&mut self, shape: impl Shape, brush: &Self::Brush, fill_rule: FillRule) {
