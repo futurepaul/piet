@@ -1,12 +1,12 @@
 //! The Raqote backend for the Piet 2D graphics abstraction.
 
-use raqote::{DrawTarget, PathBuilder, SolidSource, Source, Winding, Transform};
+use raqote::{DrawTarget, Path, PathBuilder, SolidSource, Source, Transform, Winding};
 use sw_composite::Image;
 
 use kurbo::{Affine, PathEl, Rect, Shape, Vec2};
 
 //Euclid's Transform2D is now part of raqote, but we still need Angle
-use euclid::{Angle};
+use euclid::Angle;
 
 use piet::{
     new_error, Error, ErrorKind, FillRule, Font, FontBuilder, Gradient, ImageFormat,
@@ -130,7 +130,12 @@ fn linear_points_to_transform(start: Vec2, end: Vec2) -> Transform {
 fn transform_from_rect(rect: Rect) -> Transform {
     let translate = Transform::create_translation(rect.x0 as f32, rect.y0 as f32);
 
+    let vec = Vec2::from((rect.x1, rect.y1)) - Vec2::from((rect.x0, rect.y0));
+
     // I don't think hardcoded 2 is correct but it makes the example work
+    let length = vec.hypot();
+    let possible_scale = (256.0 / length) as f32;
+    println!("possible scale: {:?}", possible_scale);
     let scale = Transform::create_scale(2.0, 2.0);
 
     // TODO: Move `inverse()` to Raqote
@@ -145,6 +150,36 @@ fn radial_points_to_transform(center: Vec2, _origin_offset: Vec2, radius: f32) -
 
     // TODO: Move `inverse()` to Raqote
     translate.pre_mul(&scale).inverse().unwrap()
+}
+
+fn shape_to_path(shape: impl Shape) -> Path {
+    let mut builder = PathBuilder::new();
+    for el in shape.to_bez_path(1e-3) {
+        match el {
+            PathEl::Moveto(p) => {
+                builder.move_to(p.x as f32, p.y as f32);
+            }
+            PathEl::Lineto(p) => {
+                builder.line_to(p.x as f32, p.y as f32);
+            }
+            PathEl::Quadto(p1, p2) => {
+                builder.quad_to(p1.x as f32, p1.y as f32, p2.x as f32, p2.y as f32);
+            }
+            PathEl::Curveto(p1, p2, p3) => {
+                builder.cubic_to(
+                    p1.x as f32,
+                    p1.y as f32,
+                    p2.x as f32,
+                    p2.y as f32,
+                    p3.x as f32,
+                    p3.y as f32,
+                );
+            }
+            PathEl::Closepath => builder.close(),
+        }
+    }
+    let path = builder.finish();
+    path
 }
 
 impl<'a> RenderContext for RaqoteRenderContext<'a> {
@@ -215,33 +250,8 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         width: impl RoundInto<Self::Coord>,
         style: Option<&StrokeStyle>,
     ) {
-        // TODO: Expose Path in Raqote so this can be moved to a function
-        let mut builder = PathBuilder::new();
-        for el in shape.to_bez_path(1e-3) {
-            match el {
-                PathEl::Moveto(p) => {
-                    builder.move_to(p.x as f32, p.y as f32);
-                }
-                PathEl::Lineto(p) => {
-                    builder.line_to(p.x as f32, p.y as f32);
-                }
-                PathEl::Quadto(p1, p2) => {
-                    builder.quad_to(p1.x as f32, p1.y as f32, p2.x as f32, p2.y as f32);
-                }
-                PathEl::Curveto(p1, p2, p3) => {
-                    builder.cubic_to(
-                        p1.x as f32,
-                        p1.y as f32,
-                        p2.x as f32,
-                        p2.y as f32,
-                        p3.x as f32,
-                        p3.y as f32,
-                    );
-                }
-                PathEl::Closepath => builder.close(),
-            }
-        }
-        let path = builder.finish();
+
+        let path = shape_to_path(shape);
 
         // TODO: Factor this out
         let cap = style
@@ -279,33 +289,7 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
     }
 
     fn fill(&mut self, shape: impl Shape, brush: &Self::Brush, fill_rule: FillRule) {
-        // TODO: Expose Path in Raqote so this can be moved to a function
-        let mut builder = PathBuilder::new();
-        for el in shape.to_bez_path(1e-3) {
-            match el {
-                PathEl::Moveto(p) => {
-                    builder.move_to(p.x as f32, p.y as f32);
-                }
-                PathEl::Lineto(p) => {
-                    builder.line_to(p.x as f32, p.y as f32);
-                }
-                PathEl::Quadto(p1, p2) => {
-                    builder.quad_to(p1.x as f32, p1.y as f32, p2.x as f32, p2.y as f32);
-                }
-                PathEl::Curveto(p1, p2, p3) => {
-                    builder.cubic_to(
-                        p1.x as f32,
-                        p1.y as f32,
-                        p2.x as f32,
-                        p2.y as f32,
-                        p3.x as f32,
-                        p3.y as f32,
-                    );
-                }
-                PathEl::Closepath => builder.close(),
-            }
-        }
-        let path = builder.finish();
+        let path = shape_to_path(shape);
 
         let winding_mode = match fill_rule {
             FillRule::EvenOdd => Winding::EvenOdd,
@@ -426,7 +410,7 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
     ) {
         let rect = rect.into();
 
-        //I don't know how to get a non-reference of image other than this dumb thing
+        //TODO: I don't know how to get a non-reference of image other than this dumb thing
         let my_own_image = Image {
             width: image.width,
             height: image.height,
