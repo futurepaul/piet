@@ -107,29 +107,30 @@ fn rgba_to_arbg(rgba: u32) -> u32 {
 // If Raqot is given an identity transform, it will render linear gradients from (0, 0) to (256, 0)
 // This function generates a transforms such that the linear gradient will be drawn
 // between the provided start and end points.
-//
-// TODO: Some gradients do not work as expected. Need to investigate further.
 fn linear_points_to_transform(start: Vec2, end: Vec2) -> Transform2D<f32> {
     let gradient_vector = end - start;
     // Move to start point
-    let translate = Transform2D::create_translation(-start.x as f32, start.y as f32);
+    let translate = Transform2D::create_translation(start.x as f32, start.y as f32);
     // Get length of gradient vector
     let length = gradient_vector.hypot() as f32;
     // Linear grandients in raqot go from (0, 0) to (256, 0), this may change in the future
     // Scaling is multiplication not division (2, not 0.5)
-    let scale = Transform2D::create_scale(256.0 / length, 256.0 / length);
+    let scale = Transform2D::create_scale(length / 256.0, length / 256.0);
     // Get correct angle
-    let rotation = Transform2D::create_rotation(Angle::radians(gradient_vector.atan2() as f32));
+    let rotation = Transform2D::create_rotation(-Angle::radians(gradient_vector.atan2() as f32));
 
-    translate.pre_mul(&rotation).pre_mul(&scale)
+    // TODO: Move `inverse()` to Raqote
+    translate.pre_mul(&rotation).pre_mul(&scale).inverse().unwrap()
 }
 
 // Generates a 2D transform for rendering radial gradients in Raqot
 fn radial_points_to_transform(center: Vec2, _origin_offset: Vec2, radius: f32) -> Transform2D<f32> {
     // Max distance is 32768
-    let scale = Transform2D::create_scale(128.0 / radius, 128.0 / radius);
-    let translate = Transform2D::create_translation(-center.x as f32, -center.y as f32);
-    translate.post_mul(&scale)
+    let scale = Transform2D::create_scale(radius / 128.0, radius / 128.0);
+    let translate = Transform2D::create_translation(center.x as f32, center.y as f32);
+
+    // TODO: Move `inverse()` to Raqote
+    translate.pre_mul(&scale).inverse().unwrap()
 }
 
 impl<'a> RenderContext for RaqoteRenderContext<'a> {
