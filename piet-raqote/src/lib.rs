@@ -127,6 +127,16 @@ fn linear_points_to_transform(start: Vec2, end: Vec2) -> Transform2D<f32> {
         .unwrap()
 }
 
+fn transform_from_rect(rect: Rect) -> Transform2D<f32> {
+    let translate = Transform2D::create_translation(rect.x0 as f32, rect.y0 as f32);
+
+    // I don't think hardcoded 2 is correct but it makes the example work
+    let scale = Transform2D::create_scale(2.0, 2.0);
+
+    // TODO: Move `inverse()` to Raqote
+    translate.pre_mul(&scale).inverse().unwrap()
+}
+
 // Generates a 2D transform for rendering radial gradients in Raqot
 fn radial_points_to_transform(center: Vec2, _origin_offset: Vec2, radius: f32) -> Transform2D<f32> {
     // Max distance is 32768
@@ -439,11 +449,13 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         }
         let path = builder.finish();
 
+        let transform = transform_from_rect(rect);
+
         //QUESTION which winding is appropriate here?
         self.draw_target.fill(
             &path,
             //TODO figure out why scaling is off
-            &Source::Image(my_own_image, Transform2D::create_scale(0.5, 0.5)),
+            &Source::Image(my_own_image, transform),
             Winding::NonZero,
         );
     }
