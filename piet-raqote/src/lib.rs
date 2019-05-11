@@ -3,13 +3,12 @@
 use raqote::{DrawTarget, PathBuilder, SolidSource, Source, Winding};
 use sw_composite::Image;
 
-use kurbo::{Affine, PathEl, QuadBez, Rect, Shape, Vec2};
-use std::borrow::Cow;
+use kurbo::{Affine, PathEl, Rect, Shape, Vec2};
 
-use euclid::{Angle, Point2D, Transform2D};
+use euclid::{Angle, Transform2D};
 
 use piet::{
-    new_error, Error, ErrorKind, FillRule, Font, FontBuilder, Gradient, GradientStop, ImageFormat,
+    new_error, Error, ErrorKind, FillRule, Font, FontBuilder, Gradient, ImageFormat,
     InterpolationMode, LineCap, LineJoin, RenderContext, RoundInto, StrokeStyle, Text, TextLayout,
     TextLayoutBuilder,
 };
@@ -315,7 +314,7 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         self.draw_target.fill(&path, brush, winding_mode);
     }
 
-    fn clip(&mut self, shape: impl Shape, fill_rule: FillRule) {
+    fn clip(&mut self, _shape: impl Shape, _fill_rule: FillRule) {
         // TODO
     }
 
@@ -326,9 +325,9 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
 
     fn draw_text(
         &mut self,
-        layout: &Self::TextLayout,
-        pos: impl RoundInto<Self::Point>,
-        brush: &Self::Brush,
+        _layout: &Self::TextLayout,
+        _pos: impl RoundInto<Self::Point>,
+        _brush: &Self::Brush,
     ) {
         // TODO
     }
@@ -471,16 +470,16 @@ impl Text for RaqoteText {
 
     fn new_font_by_name(
         &mut self,
-        name: &str,
-        size: impl RoundInto<Self::Coord>,
+        _name: &str,
+        _size: impl RoundInto<Self::Coord>,
     ) -> Result<Self::FontBuilder, Error> {
         Ok(RaqoteFontBuilder)
     }
 
     fn new_text_layout(
         &mut self,
-        font: &Self::Font,
-        text: &str,
+        _font: &Self::Font,
+        _text: &str,
     ) -> Result<Self::TextLayoutBuilder, Error> {
         Ok(RaqoteTextLayoutBuilder)
     }

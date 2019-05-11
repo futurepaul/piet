@@ -1,9 +1,6 @@
-use piet::RenderContext;
 use piet_raqote::RaqoteRenderContext;
 
 use piet_test::draw_test_picture;
-
-use std::fs::File;
 
 use raqote::{DrawTarget, PathBuilder, SolidSource, Source, Winding};
 
