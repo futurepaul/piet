@@ -1,8 +1,10 @@
 //! The Raqote backend for the Piet 2D graphics abstraction.
 
 use raqote::{DrawTarget, PathBuilder, SolidSource, Source, Winding};
+use sw_composite::Image;
 
 use kurbo::{Affine, PathEl, QuadBez, Rect, Shape, Vec2};
+use std::borrow::Cow;
 
 use euclid::{Angle, Point2D, Transform2D};
 
@@ -139,7 +141,7 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
     type Text = RaqoteText;
     type TextLayout = RaqoteTextLayout;
 
-    type Image = ();
+    type Image = sw_composite::Image;
 
     fn status(&mut self) -> Result<(), Error> {
         Ok(())
@@ -176,7 +178,11 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
                         })
                         .collect(),
                 },
-                radial_points_to_transform(gradient.center, gradient.origin_offset, gradient.radius as f32),
+                radial_points_to_transform(
+                    gradient.center,
+                    gradient.origin_offset,
+                    gradient.radius as f32,
+                ),
             )),
         }
     }
@@ -352,16 +358,71 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         buf: &[u8],
         format: ImageFormat,
     ) -> Result<Self::Image, Error> {
-        Ok(())
+        let mut image: Vec<u32> = Vec::new();
+
+        let buf = match format {
+            ImageFormat::Rgb => {
+                for i in buf.chunks(3) {
+                    image.push(
+                        0xff << 24 | ((i[0] as u32) << 16) | ((i[1] as u32) << 8) | (i[2] as u32),
+                    )
+                }
+            }
+            ImageFormat::RgbaSeparate => {
+                for i in buf.chunks(4) {
+                    image.push(
+                        ((i[0] as u32) << 24)
+                            | ((i[1] as u32) << 16)
+                            | ((i[2] as u32) << 8)
+                            | (i[3] as u32),
+                    )
+                }
+            }
+            _ => return Err(new_error(ErrorKind::NotSupported)),
+        };
+
+        Ok(Image {
+            width: width as i32,
+            height: height as i32,
+            data: image,
+        })
     }
 
     fn draw_image(
         &mut self,
         image: &Self::Image,
         rect: impl Into<Rect>,
-        interp: InterpolationMode,
+        _interp: InterpolationMode,
     ) {
+        let rect = rect.into();
 
+        println!("drawing image");
+
+        //I don't know how to get a non-reference of image other than this dumb thing
+        let my_own_image = Image {
+            width: image.width,
+            height: image.height,
+            data: image.data.clone(),
+        };
+
+        println!("image[0]: {:?}", my_own_image.data[0]);
+        let mut builder = PathBuilder::new();
+
+        //Is this correct?
+        builder.quad_to(
+            rect.x0 as f32,
+            rect.y0 as f32,
+            rect.x1 as f32,
+            rect.y1 as f32,
+        );
+        let path = builder.finish();
+
+        //TODO which winding is appropriate here?
+        self.draw_target.fill(
+            &path,
+            &Source::Image(my_own_image, Transform2D::create_scale(1.0, 1.0)),
+            Winding::NonZero,
+        );
     }
 }
 
