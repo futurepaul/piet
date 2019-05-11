@@ -367,17 +367,7 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
                         0xff << 24 | ((i[0] as u32) << 16) | ((i[1] as u32) << 8) | (i[2] as u32),
                     )
                 }
-            }
-            ImageFormat::RgbaSeparate => {
-                for i in buf.chunks(4) {
-                    image.push(
-                        ((i[0] as u32) << 24)
-                            | ((i[1] as u32) << 16)
-                            | ((i[2] as u32) << 8)
-                            | (i[3] as u32),
-                    )
-                }
-            }
+            },
             _ => return Err(new_error(ErrorKind::NotSupported)),
         };
 
@@ -421,7 +411,7 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         self.draw_target.fill(
             &path,
             &Source::Image(my_own_image, Transform2D::create_scale(1.0, 1.0)),
-            Winding::NonZero,
+            Winding::EvenOdd,
         );
     }
 }
