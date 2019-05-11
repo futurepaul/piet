@@ -1,12 +1,14 @@
 //! The Raqote backend for the Piet 2D graphics abstraction.
 
 use raqote::{DrawTarget, Path, PathBuilder, SolidSource, Source, Transform, Winding};
-use sw_composite::Image;
 
-use kurbo::{Affine, PathEl, Rect, Shape, Vec2};
+//TODO: raqote should export this type
+use sw_composite::Image;
 
 //Euclid's Transform2D is now part of raqote, but we still need Angle
 use euclid::Angle;
+
+use kurbo::{Affine, PathEl, Rect, Shape, Vec2};
 
 use piet::{
     new_error, Error, ErrorKind, FillRule, Font, FontBuilder, Gradient, ImageFormat,
@@ -127,15 +129,19 @@ fn linear_points_to_transform(start: Vec2, end: Vec2) -> Transform {
         .unwrap()
 }
 
-fn transform_from_rect(rect: Rect) -> Transform {
+//TODO fix scaling
+fn transform_image_to_rect(rect: Rect, image: &Image) -> Transform {
     let translate = Transform::create_translation(rect.x0 as f32, rect.y0 as f32);
 
-    let vec = Vec2::from((rect.x1, rect.y1)) - Vec2::from((rect.x0, rect.y0));
+    let rect_width = rect.width();
+    let rect_height = rect.height();
 
-    // I don't think hardcoded 2 is correct but it makes the example work
-    let length = vec.hypot();
-    let possible_scale = (256.0 / length) as f32;
-    println!("possible scale: {:?}", possible_scale);
+    let scale_width = (rect_width / image.width as f64) as f32;
+    let scale_height = (rect_height / image.height as f64) as f32;
+    
+    //This number seems plausible but it multiplies with overflow
+    println!("possible scale: {:?}, {:?}", scale_width, scale_height);
+
     let scale = Transform::create_scale(2.0, 2.0);
 
     // TODO: Move `inverse()` to Raqote
@@ -410,6 +416,8 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
     ) {
         let rect = rect.into();
 
+        let transform = transform_image_to_rect(rect, image);
+
         //TODO: I don't know how to get a non-reference of image other than this dumb thing
         let my_own_image = Image {
             width: image.width,
@@ -417,23 +425,25 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
             data: image.data.clone(),
         };
 
-        // TODO: Expose Path in Raqote so this can be moved to a function
-        let mut builder = PathBuilder::new();
-        for el in rect.to_bez_path(1e-3) {
-            match el {
-                PathEl::Moveto(p) => {
-                    builder.move_to(p.x as f32, p.y as f32);
-                }
-                PathEl::Lineto(p) => {
-                    builder.line_to(p.x as f32, p.y as f32);
-                }
-                PathEl::Closepath => builder.close(),
-                _ => println!("draw_image doesn't support {:?}", el),
-            }
-        }
-        let path = builder.finish();
+        let path = shape_to_path(rect);
 
-        let transform = transform_from_rect(rect);
+        // TODO: Expose Path in Raqote so this can be moved to a function
+        // let mut builder = PathBuilder::new();
+        // for el in rect.to_bez_path(1e-3) {
+        //     match el {
+        //         PathEl::Moveto(p) => {
+        //             builder.move_to(p.x as f32, p.y as f32);
+        //         }
+        //         PathEl::Lineto(p) => {
+        //             builder.line_to(p.x as f32, p.y as f32);
+        //         }
+        //         PathEl::Closepath => builder.close(),
+        //         _ => println!("draw_image doesn't support {:?}", el),
+        //     }
+        // }
+        // let path = builder.finish();
+
+        
 
         //QUESTION which winding is appropriate here?
         self.draw_target.fill(
