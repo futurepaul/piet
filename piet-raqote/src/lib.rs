@@ -34,8 +34,8 @@ impl<'a> RaqoteRenderContext<'a> {
     pub fn new(draw_target: &'a mut DrawTarget) -> RaqoteRenderContext<'a> {
         RaqoteRenderContext {
             draw_target,
-            text: RaqoteText,
             ctx_stack: vec![CtxState::default()],
+            text: RaqoteText,
         }
     }
 
@@ -68,7 +68,10 @@ pub struct RaqoteTextLayout {
     text: String,
 }
 
-pub struct RaqoteTextLayoutBuilder(RaqoteTextLayout);
+pub struct RaqoteTextLayoutBuilder {
+  font: RaqoteFont,
+  text: String
+}
 
 fn split_rgba(rgba: u32) -> (u8, u8, u8, u8) {
     (
@@ -179,6 +182,8 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
     type Coord = f32;
     type Brush = Source;
 
+    //QUESTION Text should of type TextLayout??
+    // type Text: Text<TextLayout = Self::TextLayout>;
     type Text = RaqoteText;
     type TextLayout = RaqoteTextLayout;
 
@@ -451,11 +456,11 @@ impl Text for RaqoteText {
         font: &Self::Font,
         text: &str,
     ) -> Result<Self::TextLayoutBuilder, Error> {
-        let text_layout = RaqoteTextLayout {
+        let text_layout_builder = RaqoteTextLayoutBuilder {
             font: font.clone(),
             text: text.to_owned(),
         };
-        Ok(RaqoteTextLayoutBuilder(text_layout))
+        Ok(text_layout_builder)
     }
 }
 
@@ -483,14 +488,18 @@ impl TextLayoutBuilder for RaqoteTextLayoutBuilder {
     type Out = RaqoteTextLayout;
 
     fn build(self) -> Result<Self::Out, Error> {
-        Ok(self.0)
+      //TODO we could possibly calculate width here? 
+        Ok(RaqoteTextLayout {
+          font: self.font,
+          text: self.text,
+        })
     }
 }
 
 impl TextLayout for RaqoteTextLayout {
     type Coord = f32;
 
-    fn width(&self) -> Self::Coord {
+    fn width(&self) -> f32 {
         //TODO what number should this actually be?
         20.0 
     }
