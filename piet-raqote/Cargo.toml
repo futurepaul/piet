@@ -12,7 +12,6 @@ categories = ["rendering::graphics-api"]
 kurbo = "0.2.2"
 piet = { version = "0.0.2", path = "../piet" }
 raqote = { git="https://github.com/jrmuizel/raqote"}
-euclid = "0.19.8"
 font-kit = "0.1.0"
 sw-composite = "0.1.4"
 

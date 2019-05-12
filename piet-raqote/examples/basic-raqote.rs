@@ -2,7 +2,7 @@ use piet_raqote::RaqoteRenderContext;
 
 use piet_test::draw_test_picture;
 
-use raqote::{DrawTarget, PathBuilder, SolidSource, Source, Winding};
+use raqote::{DrawTarget, DrawOptions, PathBuilder, SolidSource, Source};
 
 const TEXTURE_WIDTH: i32 = 200;
 const TEXTURE_HEIGHT: i32 = 100;
@@ -30,11 +30,11 @@ fn main() {
             b: 0xFF,
             a: 0xFF,
         }),
-        Winding::NonZero,
+        &DrawOptions::default(),
     );
 
     let mut raqote_context = RaqoteRenderContext::new(&mut draw_target);
     draw_test_picture(&mut raqote_context, test_picture_number).unwrap();
 
-    draw_target.write_png("temp-raqote.png");
+    draw_target.write_png("temp-raqote.png").unwrap();
 }
