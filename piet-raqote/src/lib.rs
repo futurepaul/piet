@@ -1,6 +1,6 @@
 //! The Raqote backend for the Piet 2D graphics abstraction.
 
-use raqote::{DrawTarget, Path, PathBuilder, SolidSource, Source, Transform, Winding};
+use raqote::{DrawTarget, Path, PathBuilder, Point, SolidSource, Source, Transform, Winding};
 
 //TODO: raqote should export this type
 use sw_composite::Image;
@@ -9,6 +9,10 @@ use sw_composite::Image;
 use euclid::Angle;
 
 use kurbo::{Affine, PathEl, Rect, Shape, Vec2};
+
+use font_kit::family_name::FamilyName;
+use font_kit::properties::Properties;
+use font_kit::source::SystemSource;
 
 use piet::{
     new_error, Error, ErrorKind, FillRule, Font, FontBuilder, Gradient, ImageFormat,
@@ -50,13 +54,24 @@ impl<'a> RaqoteRenderContext<'a> {
 
 pub struct RaqoteText;
 
-pub struct RaqoteFont;
+#[derive(Clone)]
+pub struct RaqoteFont {
+    font: font_kit::font::Font,
+    size: f32,
+}
 
-pub struct RaqoteFontBuilder;
+pub struct RaqoteFontBuilder {
+    family: String,
+    size: f32,
+    properties: Properties,
+}
 
-pub struct RaqoteTextLayout;
+pub struct RaqoteTextLayout {
+    font: RaqoteFont,
+    text: String,
+}
 
-pub struct RaqoteTextLayoutBuilder;
+pub struct RaqoteTextLayoutBuilder(RaqoteTextLayout);
 
 fn split_rgba(rgba: u32) -> (u8, u8, u8, u8) {
     (
@@ -138,7 +153,7 @@ fn transform_image_to_rect(rect: Rect, image: &Image) -> Transform {
 
     let scale_width = (rect_width / image.width as f64) as f32;
     let scale_height = (rect_height / image.height as f64) as f32;
-    
+
     //This number seems plausible but it multiplies with overflow
     println!("possible scale: {:?}, {:?}", scale_width, scale_height);
 
@@ -256,7 +271,6 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         width: impl RoundInto<Self::Coord>,
         style: Option<&StrokeStyle>,
     ) {
-
         let path = shape_to_path(shape);
 
         // TODO: Factor this out
@@ -316,11 +330,20 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
 
     fn draw_text(
         &mut self,
-        _layout: &Self::TextLayout,
-        _pos: impl RoundInto<Self::Point>,
-        _brush: &Self::Brush,
+        layout: &Self::TextLayout,
+        pos: impl RoundInto<Self::Point>,
+        brush: &Self::Brush,
     ) {
-        // TODO
+        let pos = pos.round_into();
+        let point = Point::new(pos.x as f32, pos.y as f32);
+
+        self.draw_target.draw_text(
+            &layout.font.font,
+            layout.font.size,
+            &layout.text,
+            point,
+            brush,
+        );
     }
 
     fn save(&mut self) -> Result<(), Error> {
@@ -427,24 +450,6 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
 
         let path = shape_to_path(rect);
 
-        // TODO: Expose Path in Raqote so this can be moved to a function
-        // let mut builder = PathBuilder::new();
-        // for el in rect.to_bez_path(1e-3) {
-        //     match el {
-        //         PathEl::Moveto(p) => {
-        //             builder.move_to(p.x as f32, p.y as f32);
-        //         }
-        //         PathEl::Lineto(p) => {
-        //             builder.line_to(p.x as f32, p.y as f32);
-        //         }
-        //         PathEl::Closepath => builder.close(),
-        //         _ => println!("draw_image doesn't support {:?}", el),
-        //     }
-        // }
-        // let path = builder.finish();
-
-        
-
         //QUESTION which winding is appropriate here?
         self.draw_target.fill(
             &path,
@@ -465,18 +470,26 @@ impl Text for RaqoteText {
 
     fn new_font_by_name(
         &mut self,
-        _name: &str,
-        _size: impl RoundInto<Self::Coord>,
+        name: &str,
+        size: impl RoundInto<Self::Coord>,
     ) -> Result<Self::FontBuilder, Error> {
-        Ok(RaqoteFontBuilder)
+        Ok(RaqoteFontBuilder {
+            family: name.to_owned(),
+            size: size.round_into(),
+            properties: Properties::new(),
+        })
     }
 
     fn new_text_layout(
         &mut self,
-        _font: &Self::Font,
-        _text: &str,
+        font: &Self::Font,
+        text: &str,
     ) -> Result<Self::TextLayoutBuilder, Error> {
-        Ok(RaqoteTextLayoutBuilder)
+        let text_layout = RaqoteTextLayout {
+            font: font.clone(),
+            text: text.to_owned(),
+        };
+        Ok(RaqoteTextLayoutBuilder(text_layout))
     }
 }
 
@@ -484,7 +497,16 @@ impl FontBuilder for RaqoteFontBuilder {
     type Out = RaqoteFont;
 
     fn build(self) -> Result<Self::Out, Error> {
-        Ok(RaqoteFont)
+        let font = SystemSource::new()
+            .select_best_match(&[FamilyName::SansSerif], &self.properties)
+            .unwrap()
+            .load()
+            .unwrap();
+
+        Ok(RaqoteFont {
+            font: font,
+            size: self.size,
+        })
     }
 }
 
@@ -494,7 +516,7 @@ impl TextLayoutBuilder for RaqoteTextLayoutBuilder {
     type Out = RaqoteTextLayout;
 
     fn build(self) -> Result<Self::Out, Error> {
-        Ok(RaqoteTextLayout)
+        Ok(self.0)
     }
 }
 
