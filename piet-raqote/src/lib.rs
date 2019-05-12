@@ -1,8 +1,6 @@
 //! The Raqote backend for the Piet 2D graphics abstraction.
 
-
 use raqote::{DrawTarget, DrawOptions, Path, Point, PathBuilder, SolidSource, Source, Transform, Winding};
-
 
 //TODO: raqote should export this type
 use sw_composite::Image;
@@ -274,15 +272,25 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         self.draw_target.fill(&path, brush, &DrawOptions::default());
     }
 
-    fn clip(&mut self, _shape: impl Shape, _fill_rule: FillRule) {
-        // TODO
+    fn clip(&mut self, shape: impl Shape, fill_rule: FillRule) {
+        let mut path = shape_to_path(shape);
+
+        path.winding = match fill_rule {
+            FillRule::EvenOdd => Winding::EvenOdd,
+            FillRule::NonZero => Winding::NonZero,
+        };
+
+        //QUESTION we don't ever pop clip I hope that's okay?
+        self.draw_target.push_clip(&path);
+
     }
 
     fn text(&mut self) -> &mut Self::Text {
-        // TODO: Do actual text
+        // TODO do text better 
         &mut self.text
     }
-
+    
+    //TODO why isn't text rotated when we have a transform?
     fn draw_text(
         &mut self,
         layout: &Self::TextLayout,
@@ -290,7 +298,9 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         brush: &Self::Brush,
     ) {
         let pos = pos.round_into();
-        let point = Point::new(pos.x as f32, pos.y as f32);
+
+        //TODO hardcoded dt height to fix the Y position (counts from bottom, not top)
+        let point = Point::new(pos.x as f32, 100.0 - pos.y as f32);
 
         self.draw_target.draw_text(
             &layout.font.font,
@@ -342,6 +352,7 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         buf: &[u8],
         format: ImageFormat,
     ) -> Result<Self::Image, Error> {
+
         let mut image: Vec<u32> = Vec::new();
 
         match format {
@@ -467,6 +478,7 @@ impl FontBuilder for RaqoteFontBuilder {
 
 impl Font for RaqoteFont {}
 
+//TODO seems like we should be doing some work here?
 impl TextLayoutBuilder for RaqoteTextLayoutBuilder {
     type Out = RaqoteTextLayout;
 
@@ -479,6 +491,7 @@ impl TextLayout for RaqoteTextLayout {
     type Coord = f32;
 
     fn width(&self) -> Self::Coord {
-        20.0
+        //TODO what number should this actually be?
+        20.0 
     }
 }
