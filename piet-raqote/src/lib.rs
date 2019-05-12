@@ -2,7 +2,6 @@
 
 
 use raqote::{DrawTarget, DrawOptions, Path, Point, PathBuilder, SolidSource, Source, Transform, Winding};
-use sw_composite::Image;
 
 
 //TODO: raqote should export this type
@@ -120,7 +119,7 @@ fn rgba_to_arbg(rgba: u32) -> u32 {
     (rgba << 24) | (rgba >> 8)
 }
 
-fn transform_from_rect(rect: Rect) -> Transform {
+fn transform_image_to_rect(rect: Rect, image: &Image) -> Transform {
 
     let translate = Transform::create_translation(rect.x0 as f32, rect.y0 as f32);
 
@@ -299,6 +298,7 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
             &layout.text,
             point,
             brush,
+            &DrawOptions::default()
         );
     }
 
