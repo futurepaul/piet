@@ -1,15 +1,12 @@
 //! The Raqote backend for the Piet 2D graphics abstraction.
 
-use raqote::{DrawTarget, Path, PathBuilder, SolidSource, Source, Transform, Winding};
+use raqote::{DrawTarget, DrawOptions, Path, Point, PathBuilder, SolidSource, Source, Transform, Winding};
 use sw_composite::Image;
 
 use kurbo::{Affine, PathEl, Rect, Shape, Vec2};
 
-//Euclid's Transform2D is now part of raqote, but we still need Angle
-use euclid::Angle;
-
 use piet::{
-    new_error, Error, ErrorKind, FillRule, Font, FontBuilder, Gradient, ImageFormat,
+    new_error, Error, ErrorKind, FillRule, Font, FontBuilder, Gradient, GradientStop, ImageFormat,
     InterpolationMode, LineCap, LineJoin, RenderContext, RoundInto, StrokeStyle, Text, TextLayout,
     TextLayoutBuilder,
 };
@@ -103,30 +100,6 @@ fn rgba_to_arbg(rgba: u32) -> u32 {
     (rgba << 24) | (rgba >> 8)
 }
 
-// Generates a 2D transform for rendering linear gradients in Raqot
-// If Raqot is given an identity transform, it will render linear gradients from (0, 0) to (256, 0)
-// This function generates a transforms such that the linear gradient will be drawn
-// between the provided start and end points.
-fn linear_points_to_transform(start: Vec2, end: Vec2) -> Transform {
-    let gradient_vector = end - start;
-    // Move to start point
-    let translate = Transform::create_translation(start.x as f32, start.y as f32);
-    // Get length of gradient vector
-    let length = gradient_vector.hypot() as f32;
-    // Linear grandients in raqot go from (0, 0) to (256, 0), this may change in the future
-    // Scaling is multiplication not division (2, not 0.5)
-    let scale = Transform::create_scale(length / 256.0, length / 256.0);
-    // Get correct angle
-    let rotation = Transform::create_rotation(-Angle::radians(gradient_vector.atan2() as f32));
-
-    // TODO: Move `inverse()` to Raqote
-    translate
-        .pre_mul(&rotation)
-        .pre_mul(&scale)
-        .inverse()
-        .unwrap()
-}
-
 fn transform_from_rect(rect: Rect) -> Transform {
     let translate = Transform::create_translation(rect.x0 as f32, rect.y0 as f32);
 
@@ -137,16 +110,6 @@ fn transform_from_rect(rect: Rect) -> Transform {
     let possible_scale = (256.0 / length) as f32;
     println!("possible scale: {:?}", possible_scale);
     let scale = Transform::create_scale(2.0, 2.0);
-
-    // TODO: Move `inverse()` to Raqote
-    translate.pre_mul(&scale).inverse().unwrap()
-}
-
-// Generates a 2D transform for rendering radial gradients in Raqot
-fn radial_points_to_transform(center: Vec2, _origin_offset: Vec2, radius: f32) -> Transform {
-    // Max distance is 32768
-    let scale = Transform::create_scale(radius / 128.0, radius / 128.0);
-    let translate = Transform::create_translation(center.x as f32, center.y as f32);
 
     // TODO: Move `inverse()` to Raqote
     translate.pre_mul(&scale).inverse().unwrap()
@@ -182,6 +145,13 @@ fn shape_to_path(shape: impl Shape) -> Path {
     path
 }
 
+fn convert_gradient_stops(stops: Vec<GradientStop>) -> Vec<raqote::GradientStop> {
+    stops
+        .iter()
+        .map(|stop| raqote::GradientStop { position: stop.pos, color: rgba_to_arbg(stop.rgba), })
+        .collect()
+}
+
 impl<'a> RenderContext for RaqoteRenderContext<'a> {
     // TODO: Maybe this should be a (f32, f32)?
     type Point = Vec2;
@@ -204,36 +174,19 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
 
     fn gradient(&mut self, gradient: Gradient) -> Result<Self::Brush, Error> {
         match gradient {
-            Gradient::Linear(gradient) => Ok(Source::LinearGradient(
-                raqote::Gradient {
-                    stops: gradient
-                        .stops
-                        .iter()
-                        .map(|stop| raqote::GradientStop {
-                            position: stop.pos,
-                            color: rgba_to_arbg(stop.rgba),
-                        })
-                        .collect(),
-                },
-                linear_points_to_transform(gradient.start, gradient.end),
-            )),
-            Gradient::Radial(gradient) => Ok(Source::RadialGradient(
-                raqote::Gradient {
-                    stops: gradient
-                        .stops
-                        .iter()
-                        .map(|stop| raqote::GradientStop {
-                            position: stop.pos,
-                            color: rgba_to_arbg(stop.rgba),
-                        })
-                        .collect(),
-                },
-                radial_points_to_transform(
-                    gradient.center,
-                    gradient.origin_offset,
-                    gradient.radius as f32,
-                ),
-            )),
+            Gradient::Linear(gradient) => {
+                let stops = convert_gradient_stops(gradient.stops);
+                let start = Point::new(gradient.start.x as f32, gradient.start.y as f32);
+                let end = Point::new(gradient.end.x as f32, gradient.end.y as f32);
+
+                Ok(Source::new_linear_gradient(raqote::Gradient { stops }, start, end))
+            },
+            Gradient::Radial(gradient) => {
+                let stops = convert_gradient_stops(gradient.stops);
+                let center = Point::new(gradient.center.x as f32, gradient.center.y as f32);
+
+                Ok(Source::new_radial_gradient(raqote::Gradient { stops }, center, gradient.radius as f32))
+            },
         }
     }
 
@@ -285,18 +238,18 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
             dash_offset,
         };
 
-        self.draw_target.stroke(&path, brush, &stroke_style);
+        self.draw_target.stroke(&path, brush, &stroke_style, &DrawOptions::default());
     }
 
     fn fill(&mut self, shape: impl Shape, brush: &Self::Brush, fill_rule: FillRule) {
-        let path = shape_to_path(shape);
+        let mut path = shape_to_path(shape);
 
-        let winding_mode = match fill_rule {
+        path.winding = match fill_rule {
             FillRule::EvenOdd => Winding::EvenOdd,
             FillRule::NonZero => Winding::NonZero,
         };
 
-        self.draw_target.fill(&path, brush, winding_mode);
+        self.draw_target.fill(&path, brush, &DrawOptions::default());
     }
 
     fn clip(&mut self, _shape: impl Shape, _fill_rule: FillRule) {
@@ -435,12 +388,11 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
 
         let transform = transform_from_rect(rect);
 
-        //QUESTION which winding is appropriate here?
         self.draw_target.fill(
             &path,
             //TODO figure out why scaling is off
             &Source::Image(my_own_image, transform),
-            Winding::NonZero,
+            &DrawOptions::default(),
         );
     }
 }
