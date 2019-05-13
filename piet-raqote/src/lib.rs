@@ -8,7 +8,7 @@ use font_kit::family_name::FamilyName;
 use font_kit::properties::Properties;
 use font_kit::source::SystemSource;
 
-use std::borrow::Cow;
+use skribo::{make_layout, TextStyle, Layout, FontCollection, FontRef};
 
 use piet::{
     new_error, Error, ErrorKind, FillRule, Font, FontBuilder, Gradient, GradientStop, ImageFormat,
@@ -52,7 +52,7 @@ pub struct RaqoteText;
 
 #[derive(Clone)]
 pub struct RaqoteFont {
-    font: font_kit::font::Font,
+    font: FontRef,
     size: f32,
 }
 
@@ -63,13 +63,15 @@ pub struct RaqoteFontBuilder {
 }
 
 pub struct RaqoteTextLayout {
+    // TODO: Store reference?
     font: RaqoteFont,
-    text: String,
+    layout: Layout,
 }
 
 pub struct RaqoteTextLayoutBuilder {
-  font: RaqoteFont,
-  text: String
+    // TODO: Store reference?
+    font: RaqoteFont,
+    text: String,
 }
 
 //We need this struct to avoid lifetime issues with raqote's Image type
@@ -183,10 +185,11 @@ fn convert_gradient_stops(stops: Vec<GradientStop>) -> Vec<raqote::GradientStop>
 }
 
 impl<'a> RenderContext for RaqoteRenderContext<'a> {
-    // TODO: Maybe this should be a (f32, f32)?
+    // TODO: this should be a raqote Point (might have to wrap to impl as f32)
     type Point = Vec2;
     type Coord = f32;
-    // QUESTION: rustc said this needs a liftime now so I chose this one
+
+    // The render context must outlive the brush 
     type Brush = Source<'a>;
 
     //QUESTION Text should of type TextLayout??
@@ -318,13 +321,22 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         let pos = pos.round_into();
 
         //TODO hardcoded dt height to fix the Y position (counts from bottom, not top)
-        let point = Point::new(pos.x as f32, 100.0 - pos.y as f32);
+        // let point = Point::new(pos.x as f32, 100.0 - pos.y as f32);
+        let positions = layout.layout.glyphs
+            .iter()
+            .map(|glyph| Point::new(glyph.offset.x + pos.x as f32, glyph.offset.y + pos.y as f32))
+            .collect::<Vec<Point>>();
 
-        self.draw_target.draw_text(
-            &layout.font.font,
+        let glyphs = layout.layout.glyphs
+            .iter()
+            .map(|glyph| glyph.glyph_id)
+            .collect::<Vec<u32>>();
+
+        self.draw_target.draw_glyphs(
+            &layout.font.font.font,
             layout.font.size,
-            &layout.text,
-            point,
+            &glyphs,
+            &positions,
             brush,
             &DrawOptions::default()
         );
@@ -424,8 +436,6 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
     ) {
         let rect = rect.into();
 
-
-        //TODO: I don't know how to get a non-reference of image other than this dumb thing
         let raqote_image = raqote::Image {
           width: image.width as i32,
           height: image.height as i32,
@@ -470,11 +480,11 @@ impl Text for RaqoteText {
         font: &Self::Font,
         text: &str,
     ) -> Result<Self::TextLayoutBuilder, Error> {
-        let text_layout_builder = RaqoteTextLayoutBuilder {
+        Ok(RaqoteTextLayoutBuilder {
             font: font.clone(),
+            // TODO: Store a reference?
             text: text.to_owned(),
-        };
-        Ok(text_layout_builder)
+        })
     }
 }
 
@@ -483,13 +493,13 @@ impl FontBuilder for RaqoteFontBuilder {
 
     fn build(self) -> Result<Self::Out, Error> {
         let font = SystemSource::new()
-            .select_best_match(&[FamilyName::SansSerif], &self.properties)
+            .select_best_match(&[FamilyName::Title(self.family), FamilyName::SansSerif], &self.properties)
             .unwrap()
             .load()
             .unwrap();
 
         Ok(RaqoteFont {
-            font: font,
+            font: FontRef::new(font),
             size: self.size,
         })
     }
@@ -502,11 +512,14 @@ impl TextLayoutBuilder for RaqoteTextLayoutBuilder {
     type Out = RaqoteTextLayout;
 
     fn build(self) -> Result<Self::Out, Error> {
-      //TODO we could possibly calculate width here? 
-        Ok(RaqoteTextLayout {
-          font: self.font,
-          text: self.text,
-        })
+        let layout = make_layout(&TextStyle { size: self.font.size }, &self.font.font, &self.text);
+        
+        let text_layout = RaqoteTextLayout {
+            font: self.font.clone(),
+            layout
+        };
+
+        Ok(text_layout)
     }
 }
 
@@ -514,7 +527,6 @@ impl TextLayout for RaqoteTextLayout {
     type Coord = f32;
 
     fn width(&self) -> f32 {
-        //TODO what number should this actually be?
-        20.0 
+        self.layout.advance.x
     }
 }
