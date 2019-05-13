@@ -11,9 +11,8 @@ categories = ["rendering::graphics-api"]
 [dependencies]
 kurbo = "0.2.2"
 piet = { version = "0.0.2", path = "../piet" }
-raqote = { git="https://github.com/jrmuizel/raqote" } 
+raqote = { git="https://github.com/jrmuizel/raqote/" }
 font-kit = "0.1.0"
-sw-composite = "0.1.4"
 
 [dev-dependencies]
 piet-test = { version = "0.0.2", path = "../piet-test" }

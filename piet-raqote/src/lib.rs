@@ -2,14 +2,13 @@
 
 use raqote::{DrawTarget, DrawOptions, Path, Point, PathBuilder, SolidSource, Source, Transform, Winding};
 
-//TODO: raqote should export this type
-use sw_composite::Image;
-
 use kurbo::{Affine, PathEl, Rect, Shape, Vec2};
 
 use font_kit::family_name::FamilyName;
 use font_kit::properties::Properties;
 use font_kit::source::SystemSource;
+
+use std::borrow::Cow;
 
 use piet::{
     new_error, Error, ErrorKind, FillRule, Font, FontBuilder, Gradient, GradientStop, ImageFormat,
@@ -73,6 +72,13 @@ pub struct RaqoteTextLayoutBuilder {
   text: String
 }
 
+//We need this struct to avoid lifetime issues with raqote's Image type
+pub struct InternalImage {
+  width: usize,
+  height: usize,
+  data: Vec<u32>,
+}
+
 fn split_rgba(rgba: u32) -> (u8, u8, u8, u8) {
     (
         (rgba >> 24) as u8,
@@ -120,7 +126,7 @@ fn rgba_to_arbg(rgba: u32) -> u32 {
     (rgba << 24) | (rgba >> 8)
 }
 
-fn transform_image_to_rect(rect: Rect, image: &Image) -> Transform {
+fn transform_image_to_rect(rect: Rect, image: &raqote::Image) -> Transform {
 
     let translate = Transform::create_translation(rect.x0 as f32, rect.y0 as f32);
 
@@ -180,14 +186,16 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
     // TODO: Maybe this should be a (f32, f32)?
     type Point = Vec2;
     type Coord = f32;
-    type Brush = Source;
+    // QUESTION: rustc said this needs a liftime now so I chose this one
+    type Brush = Source<'a>;
 
     //QUESTION Text should of type TextLayout??
     // type Text: Text<TextLayout = Self::TextLayout>;
     type Text = RaqoteText;
     type TextLayout = RaqoteTextLayout;
 
-    type Image = sw_composite::Image;
+    //This needs to live as long as source 
+    type Image = InternalImage;
 
     fn status(&mut self) -> Result<(), Error> {
         Ok(())
@@ -216,10 +224,15 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         }
     }
 
-    fn clear(&mut self, _rgb: u32) {
-        // TODO: Fork Raqote to either (or both)
+            // TODO: Fork Raqote to either (or both)
         // 1. Clear command
         // 2. Expose width and height
+
+    fn clear(&mut self, rgb: u32) {
+        let rgba = (rgb << 8) | 0xff;
+        let (r, g, b, a) = split_rgba(rgba);
+        let source = SolidSource { r, g, b, a };
+        self.draw_target.clear(source);
     }
 
     fn stroke(
@@ -396,11 +409,11 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
             _ => return Err(new_error(ErrorKind::NotSupported)),
         };
 
-        return Ok(Image {
-            width: width as i32,
-            height: height as i32,
-            data: image,
-        });
+        Ok(InternalImage {
+            width: width as usize,
+            height: height as usize,
+            data: image
+        })
     }
 
     fn draw_image(
@@ -411,21 +424,22 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
     ) {
         let rect = rect.into();
 
-        let transform = transform_image_to_rect(rect, image);
 
         //TODO: I don't know how to get a non-reference of image other than this dumb thing
-        let my_own_image = Image {
-            width: image.width,
-            height: image.height,
-            data: image.data.clone(),
+        let raqote_image = raqote::Image {
+          width: image.width as i32,
+          height: image.height as i32,
+          data: &image.data[..]
         };
+
+        let transform = transform_image_to_rect(rect, &raqote_image);
 
         let path = shape_to_path(rect);
 
         self.draw_target.fill(
             &path,
             //TODO figure out why scaling is off
-            &Source::Image(my_own_image, transform),
+            &Source::Image(raqote_image, transform),
             &DrawOptions::default(),
         );
     }
