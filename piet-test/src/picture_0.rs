@@ -21,10 +21,11 @@ pub fn draw(rc: &mut impl RenderContext) -> Result<(), Error> {
     let mut path = BezPath::new();
     path.moveto((10.0, 20.0));
     path.curveto((10.0, 80.0), (100.0, 80.0), (100.0, 60.0));
+    path.closepath();
     let brush = rc.solid_brush(0x00_00_80_C0)?;
     rc.fill(path, &brush, FillRule::NonZero);
 
-    let font = rc.text().new_font_by_name("Segoe UI", 12.0)?.build()?;
+    let font = rc.text().new_font_by_name("Helvetica", 12.0)?.build()?;
     let layout = rc.text().new_text_layout(&font, "Hello piet!")?.build()?;
     let w: f64 = layout.width().into();
     let brush = rc.solid_brush(0x80_00_00_C0)?;
