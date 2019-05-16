@@ -11,7 +11,7 @@ categories = ["rendering::graphics-api"]
 [dependencies]
 kurbo = "0.2.2"
 piet = { version = "0.0.2", path = "../piet" }
-raqote = { git="https://github.com/cbrewster/raqote", branch="master" }
+raqote = { git="https://github.com/jrmuizel/raqote", branch="master" }
 font-kit = "0.1.0"
 skribo = { git="https://github.com/linebender/skribo" }
 

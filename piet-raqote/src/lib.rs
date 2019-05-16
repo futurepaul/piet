@@ -2,7 +2,7 @@
 
 // TODO: dpi scaling!!
 use raqote::{
-    DrawOptions, DrawTarget, Path, PathBuilder, Point, SolidSource, Source, Transform, Winding,
+    ExtendMode, DrawOptions, DrawTarget, Path, PathBuilder, Point, SolidSource, Source, Transform, Winding,
 };
 
 use kurbo::{Affine, PathEl, Rect, Shape, Vec2};
@@ -98,7 +98,7 @@ fn split_rgba(rgba: u32) -> (u8, u8, u8, u8) {
 fn convert_line_join(line_join: LineJoin) -> raqote::LineJoin {
     match line_join {
         LineJoin::Round => raqote::LineJoin::Round,
-        LineJoin::Miter => raqote::LineJoin::Mitre,
+        LineJoin::Miter => raqote::LineJoin::Miter,
         LineJoin::Bevel => raqote::LineJoin::Bevel,
     }
 }
@@ -269,11 +269,11 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         let join = style
             .and_then(|style| style.line_join)
             .map(convert_line_join)
-            .unwrap_or(raqote::LineJoin::Mitre);
+            .unwrap_or(raqote::LineJoin::Miter);
 
         let width = width.round_into();
 
-        let mitre_limit = style
+        let miter_limit = style
             .and_then(|style| style.miter_limit)
             .map(|miter_limit| miter_limit as f32)
             .unwrap_or(10.0);
@@ -287,7 +287,7 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
             cap,
             join,
             width,
-            mitre_limit,
+            miter_limit,
             dash_array,
             dash_offset,
         };
@@ -463,9 +463,10 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         self.draw_target.fill(
             &path,
             //TODO figure out why scaling is off
-            &Source::Image(raqote_image, transform),
+            &Source::Image(raqote_image, ExtendMode::Repeat, transform),
             &DrawOptions::default(),
         );
+        // self.draw_target.draw_image_at(rect.x0 as f32, rect.y0 as f32, &raqote_image, &DrawOptions::default());
     }
 }
 
