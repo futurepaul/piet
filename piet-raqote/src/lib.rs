@@ -134,21 +134,29 @@ fn rgba_to_arbg(rgba: u32) -> u32 {
 }
 
 fn transform_image_to_rect(rect: Rect, image: &raqote::Image) -> Transform {
-    let translate = Transform::create_translation(rect.x0 as f32, rect.y0 as f32);
+    let translate = Transform::create_translation(-rect.x0 as f32, -rect.y0 as f32);
 
+    dbg!(rect.width());
+    dbg!(image.width);
     let rect_width = rect.width();
     let rect_height = rect.height();
+// 1 - (16 * 40 / 1000)
+    let scale_width = (1. - (image.width as f64 * rect.width() / 1000.)) as f32;
+    let scale_height = (1. - (image.height as f64 * rect.height() / 1000.)) as f32;
 
-    let scale_width = (rect_width / image.width as f64) as f32;
-    let scale_height = (rect_height / image.height as f64) as f32;
+    // let scale_width = (image.width as f64 / rect_width) as f32;
+    // let scale_height = (image.height as f64 / rect_height) as f32;
 
     //This number seems plausible but it multiplies with overflow
     println!("possible scale: {:?}, {:?}", scale_width, scale_height);
 
-    let scale = Transform::create_scale(2.0, 2.0);
+    let scale = Transform::create_scale(scale_width, scale_height);
+
+
+    dbg!(scale_width * image.width as f32);
 
     // TODO: Move `inverse()` to Raqote
-    translate.pre_mul(&scale).inverse().unwrap()
+    translate.post_mul(&scale)
 }
 
 fn shape_to_path(shape: impl Shape) -> Path {
@@ -457,6 +465,7 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         };
 
         let transform = transform_image_to_rect(rect, &raqote_image);
+        // let transform = Transform::create_translation(-rect.x0 as f32, -rect.y0 as f32);
 
         let path = shape_to_path(rect);
 
