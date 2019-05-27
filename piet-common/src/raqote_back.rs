@@ -43,7 +43,7 @@ impl<'a> BitmapTarget<'a> {
     RaqoteRenderContext::new(&mut self.dt)
   }
 
-  pub fn into_raw_pixels(mut self, fmt: ImageFormat) -> Result<Vec<u8>, piet::Error> {
+  pub fn into_raw_pixels(mut self, fmt: ImageFormat) -> Result<Vec<u32>, piet::Error> {
     //Only support RGBA currently
     if fmt != ImageFormat::RgbaPremul {
       return Err(piet::new_error(ErrorKind::NotSupported));
@@ -52,25 +52,26 @@ impl<'a> BitmapTarget<'a> {
     let buf = self.dt.get_data();
 
     //TODO if we know the width * height we can size this vec upfront
-    let mut output = Vec::new();
+    // let mut output = Vec::new();
+    let output = buf;
 
-    for pixel in buf {
-            let a = (pixel >> 24) & 0xffu32;
-            let mut r = (pixel >> 16) & 0xffu32;
-            let mut g = (pixel >> 8) & 0xffu32;
-            let mut b = (pixel >> 0) & 0xffu32;
+    // for pixel in buf {
+    //         let a = (pixel >> 24) & 0xffu32;
+    //         let mut r = (pixel >> 16) & 0xffu32;
+    //         let mut g = (pixel >> 8) & 0xffu32;
+    //         let mut b = (pixel >> 0) & 0xffu32;
 
-            if a > 0u32 {
-                r = r * 255u32 / a;
-                g = g * 255u32 / a;
-                b = b * 255u32 / a;
-            }
+    //         if a > 0u32 {
+    //             r = r * 255u32 / a;
+    //             g = g * 255u32 / a;
+    //             b = b * 255u32 / a;
+    //         }
 
-            output.push(r as u8);
-            output.push(g as u8);
-            output.push(b as u8);
-            output.push(a as u8);
-        }
+    //         output.push(r as u8);
+    //         output.push(g as u8);
+    //         output.push(b as u8);
+    //         output.push(a as u8);
+    //     }
     
     Ok(output)
 
