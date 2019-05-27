@@ -2,7 +2,7 @@
 
 // TODO: dpi scaling!!
 use raqote::{
-    ExtendMode, DrawOptions, DrawTarget, Path, PathBuilder, Point, SolidSource, Source, Transform, Winding,
+    Spread, ExtendMode, DrawOptions, DrawTarget, Path, PathBuilder, Point, SolidSource, Source, Transform, Winding,
 };
 
 use kurbo::{Affine, PathEl, Rect, Shape, Vec2};
@@ -237,6 +237,7 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
                     raqote::Gradient { stops },
                     start,
                     end,
+                    Spread::Pad
                 ))
             }
             Gradient::Radial(gradient) => {
@@ -247,6 +248,7 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
                     raqote::Gradient { stops },
                     center,
                     gradient.radius as f32,
+                    Spread::Pad
                 ))
             }
         }
