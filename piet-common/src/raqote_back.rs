@@ -73,7 +73,7 @@ impl<'a> BitmapTarget<'a> {
     //         output.push(a as u8);
     //     }
     
-    Ok(output)
+    Ok(output.to_vec())
 
   }
 }
