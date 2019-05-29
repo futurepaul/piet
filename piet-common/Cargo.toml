@@ -15,14 +15,18 @@ web = ["piet-web"]
 [dependencies]
 kurbo = "0.2.1"
 piet = { version = "0.0.2", path = "../piet" }
+piet-cairo = {version = "0.0.2", path = "../piet-cairo", optional = true }
 piet-raqote = { version = "0.0.1", path = "../piet-raqote", optional = true }
 piet-direct2d = { version = "0.0.2", path = "../piet-direct2d", optional = true }
 piet-web = { version = "0.0.2", path = "../piet-web", optional = true }
-raqote = { git="https://github.com/jrmuizel/raqote", optional = true}
 
-[target.'cfg(not(any(target_arch="wasm32", target_os="windows")))'.dependencies]
+[target.'cfg(not(any(target_arch="wasm32", target_os="windows", feature="raq")))'.dependencies]
+piet-cairo = { version = "0.0.2", path = "../piet-cairo" }
+cairo-rs = { version = "0.5.0", default_features = false}
+
+[target.'cfg(feature = "raq")'.dependencies]
 piet-raqote = { version = "0.0.1", path = "../piet-raqote" }
-raqote = { git="https://github.com/jrmuizel/raqote" }
+raqote = { git="https://github.com/jrmuizel/raqote", optional = true}
 
 [target.'cfg(target_os="windows")'.dependencies]
 piet-direct2d = { version = "0.0.2", path = "../piet-direct2d" }

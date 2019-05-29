@@ -1,15 +1,14 @@
 //! Selection of a common back-end for piet.
 
-#[cfg(all(
-    feature = "cairo",
-    not(any(target_arch = "wasm32", target_os = "windows", feature = "direct2d"))
-))]
+#[cfg(
+    not(any(target_arch = "wasm32", target_os = "windows", feature = "direct2d", feature = "raq"))
+)]
 mod cairo_back;
 
-#[cfg(all(
-    feature = "cairo",
-    not(any(target_arch = "wasm32", target_os = "windows", feature = "direct2d"))
-))]
+#[cfg(
+    
+    not(any(target_arch = "wasm32", target_os = "windows", feature = "direct2d", feature = "raq"))
+)]
 pub use crate::cairo_back::*;
 
 #[cfg(all(
