@@ -11,7 +11,7 @@ use font_kit::family_name::FamilyName;
 use font_kit::properties::Properties;
 use font_kit::source::SystemSource;
 
-use skribo::{make_layout, FontCollection, FontRef, Layout, TextStyle};
+use skribo::{make_layout, FontRef, Layout, TextStyle};
 
 use piet::{
     new_error, Error, ErrorKind, FillRule, Font, FontBuilder, Gradient, GradientStop, ImageFormat,
@@ -136,26 +136,12 @@ fn rgba_to_arbg(rgba: u32) -> u32 {
 fn transform_image_to_rect(rect: Rect, image: &raqote::Image) -> Transform {
     let translate = Transform::create_translation(-rect.x0 as f32, -rect.y0 as f32);
 
-    dbg!(rect.width());
-    dbg!(image.width);
-    let rect_width = rect.width();
-    let rect_height = rect.height();
-// 1 - (16 * 40 / 1000)
+    //TODO: still one pixel off somehow
     let scale_width = (1. - (image.width as f64 * rect.width() / 1000.)) as f32;
     let scale_height = (1. - (image.height as f64 * rect.height() / 1000.)) as f32;
 
-    // let scale_width = (image.width as f64 / rect_width) as f32;
-    // let scale_height = (image.height as f64 / rect_height) as f32;
-
-    //This number seems plausible but it multiplies with overflow
-    println!("possible scale: {:?}, {:?}", scale_width, scale_height);
-
     let scale = Transform::create_scale(scale_width, scale_height);
 
-
-    dbg!(scale_width * image.width as f32);
-
-    // TODO: Move `inverse()` to Raqote
     translate.post_mul(&scale)
 }
 
@@ -241,7 +227,7 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
                 ))
             }
             Gradient::Radial(gradient) => {
-                let stops = convert_gradient_stops((gradient.stops));
+                let stops = convert_gradient_stops(gradient.stops);
                 let center = to_point((gradient.center.x, gradient.center.y));
 
                 Ok(Source::new_radial_gradient(
@@ -330,11 +316,10 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
     }
 
     fn text(&mut self) -> &mut Self::Text {
-        // TODO do text better
         &mut self.text
     }
 
-    //TODO why isn't text rotated when we have a transform?
+    //TODO: why isn't text rotated when we have a transform?
     fn draw_text(
         &mut self,
         layout: &Self::TextLayout,
