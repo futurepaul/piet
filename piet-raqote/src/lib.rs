@@ -2,21 +2,21 @@
 
 // TODO: dpi scaling!!
 use raqote::{
-    ExtendMode, DrawOptions, DrawTarget, Path, PathBuilder, Point, SolidSource, Source, Transform, Winding,
+    Spread, ExtendMode, DrawOptions, DrawTarget, Path, PathBuilder, Point, SolidSource, Source, Transform, Winding,
 };
 
-use kurbo::{Affine, PathEl, Rect, Shape, Vec2};
+use piet::kurbo::{Affine, PathEl, Rect, Shape, Vec2};
 
 use font_kit::family_name::FamilyName;
 use font_kit::properties::Properties;
 use font_kit::source::SystemSource;
 
-use skribo::{make_layout, FontCollection, FontRef, Layout, TextStyle};
+use skribo::{make_layout, FontRef, Layout, TextStyle};
 
 use piet::{
     new_error, Error, ErrorKind, FillRule, Font, FontBuilder, Gradient, GradientStop, ImageFormat,
     InterpolationMode, LineCap, LineJoin, RenderContext, RoundFrom, RoundInto, StrokeStyle, Text,
-    TextLayout, TextLayoutBuilder,
+    TextLayout, TextLayoutBuilder, Color,
 };
 
 #[derive(Default)]
@@ -86,7 +86,8 @@ pub struct InternalImage {
 
 pub struct RaqotePoint(pub Point);
 
-fn split_rgba(rgba: u32) -> (u8, u8, u8, u8) {
+fn split_rgba(rgba: Color) -> (u8, u8, u8, u8) {
+    let rgba = rgba.as_rgba32();
     (
         (rgba >> 24) as u8,
         ((rgba >> 16) & 255) as u8,
@@ -163,26 +164,26 @@ fn shape_to_path(shape: impl Shape) -> Path {
     let mut builder = PathBuilder::new();
     for el in shape.to_bez_path(1e-3) {
         match el {
-            PathEl::Moveto(p) => {
+            PathEl::MoveTo(p) => {
                 let p = to_point(p);
                 builder.move_to(p.x, p.y);
             }
-            PathEl::Lineto(p) => {
+            PathEl::LineTo(p) => {
                 let p = to_point(p);
                 builder.line_to(p.x, p.y);
             }
-            PathEl::Quadto(p1, p2) => {
+            PathEl::QuadTo(p1, p2) => {
                 let p1 = to_point(p1);
                 let p2 = to_point(p2);
                 builder.quad_to(p1.x, p1.y, p2.x, p2.y);
             }
-            PathEl::Curveto(p1, p2, p3) => {
+            PathEl::CurveTo(p1, p2, p3) => {
                 let p1 = to_point(p1);
                 let p2 = to_point(p2);
                 let p3 = to_point(p3);
                 builder.cubic_to(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y);
             }
-            PathEl::Closepath => builder.close(),
+            PathEl::ClosePath => builder.close(),
         }
     }
 
@@ -196,7 +197,7 @@ fn convert_gradient_stops(stops: Vec<GradientStop>) -> Vec<raqote::GradientStop>
         .iter()
         .map(|stop| raqote::GradientStop {
             position: stop.pos,
-            color: rgba_to_arbg(stop.rgba),
+            color: rgba_to_arbg(stop.color.as_rgba32()),
         })
         .collect()
 }
@@ -221,9 +222,9 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         Ok(())
     }
 
-    fn solid_brush(&mut self, rgba: u32) -> Result<Self::Brush, Error> {
+    fn solid_brush(&mut self, rgba: Color) -> Self::Brush {
         let (r, g, b, a) = split_rgba(rgba);
-        Ok(Source::Solid(SolidSource { r, g, b, a }))
+        Source::Solid(SolidSource { r, g, b, a })
     }
 
     fn gradient(&mut self, gradient: Gradient) -> Result<Self::Brush, Error> {
@@ -237,23 +238,25 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
                     raqote::Gradient { stops },
                     start,
                     end,
+                    Spread::Pad
                 ))
             }
             Gradient::Radial(gradient) => {
-                let stops = convert_gradient_stops((gradient.stops));
+                let stops = convert_gradient_stops(gradient.stops);
                 let center = to_point((gradient.center.x, gradient.center.y));
 
                 Ok(Source::new_radial_gradient(
                     raqote::Gradient { stops },
                     center,
                     gradient.radius as f32,
+                    Spread::Pad
                 ))
             }
         }
     }
 
-    fn clear(&mut self, rgb: u32) {
-        let rgba = (rgb << 8) | 0xff;
+    fn clear(&mut self, rgba: Color) {
+        // let rgba = (rgb << 8) | 0xff;
         let (r, g, b, a) = split_rgba(rgba);
         let source = SolidSource { r, g, b, a };
         self.draw_target.clear(source);
@@ -332,7 +335,7 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         &mut self.text
     }
 
-    //TODO why isn't text rotated when we have a transform?
+    //TODO why are the glpyhs rotated the wrong way?
     fn draw_text(
         &mut self,
         layout: &Self::TextLayout,
@@ -498,6 +501,12 @@ impl RoundFrom<(f64, f64)> for RaqotePoint {
 impl RoundFrom<(f32, f32)> for RaqotePoint {
     fn round_from(vec: (f32, f32)) -> RaqotePoint {
         RaqotePoint(Point::new(vec.0 as f32, vec.1 as f32))
+    }
+}
+
+impl RoundFrom<piet::kurbo::Point> for RaqotePoint {
+    fn round_from(point: piet::kurbo::Point) -> RaqotePoint {
+        RaqotePoint(Point::new(point.x as f32, point.y as f32))
     }
 }
 

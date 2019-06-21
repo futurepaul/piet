@@ -9,7 +9,7 @@ keywords = ["graphics", "2d"]
 
 [features]
 d2d = ["piet-direct2d"]
-raq = ["piet-raqote", "raqote"]
+cairo = ["piet-cairo", "cairo-rs"]
 web = ["piet-web"]
 
 [dependencies]
