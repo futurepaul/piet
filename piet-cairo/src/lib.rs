@@ -7,12 +7,12 @@ use cairo::{
     ImageSurface, Matrix, Pattern, PatternTrait, ScaledFont, Status, SurfacePattern,
 };
 
-use kurbo::{Affine, PathEl, QuadBez, Rect, Shape, Vec2};
+use piet::kurbo::{Affine, PathEl, Point, QuadBez, Rect, Shape, Vec2};
 
 use piet::{
-    new_error, Error, ErrorKind, FillRule, Font, FontBuilder, Gradient, GradientStop, ImageFormat,
-    InterpolationMode, LineCap, LineJoin, RenderContext, RoundInto, StrokeStyle, Text, TextLayout,
-    TextLayoutBuilder,
+    new_error, Color, Error, ErrorKind, FillRule, Font, FontBuilder, Gradient, GradientStop,
+    ImageFormat, InterpolationMode, LineCap, LineJoin, RenderContext, RoundInto, StrokeStyle, Text,
+    TextLayout, TextLayoutBuilder,
 };
 
 pub struct CairoRenderContext<'a> {
@@ -125,17 +125,18 @@ impl<'a> RenderContext for CairoRenderContext<'a> {
         }
     }
 
-    fn clear(&mut self, rgb: u32) {
+    fn clear(&mut self, color: Color) {
+        let rgba = color.as_rgba32();
         self.ctx.set_source_rgb(
-            byte_to_frac(rgb >> 16),
-            byte_to_frac(rgb >> 8),
-            byte_to_frac(rgb),
+            byte_to_frac(rgba >> 24),
+            byte_to_frac(rgba >> 16),
+            byte_to_frac(rgba >> 8),
         );
         self.ctx.paint();
     }
 
-    fn solid_brush(&mut self, rgba: u32) -> Result<Brush, Error> {
-        Ok(Brush::Solid(rgba))
+    fn solid_brush(&mut self, color: Color) -> Brush {
+        Brush::Solid(color.as_rgba32())
     }
 
     fn gradient(&mut self, gradient: Gradient) -> Result<Brush, Error> {
@@ -308,7 +309,7 @@ impl<'a> RenderContext for CairoRenderContext<'a> {
 
 fn set_gradient_stops(dst: &mut impl cairo::Gradient, src: &[GradientStop]) {
     for stop in src {
-        let rgba = stop.rgba;
+        let rgba = stop.color.as_rgba32();
         dst.add_color_stop_rgba(
             stop.pos as f64,
             byte_to_frac(rgba >> 24),
@@ -418,29 +419,29 @@ impl<'a> CairoRenderContext<'a> {
         // This shouldn't be necessary, we always leave the context in no-path
         // state. But just in case, and it should be harmless.
         self.ctx.new_path();
-        let mut last = Vec2::default();
+        let mut last = Point::ZERO;
         for el in shape.to_bez_path(1e-3) {
             match el {
-                PathEl::Moveto(p) => {
+                PathEl::MoveTo(p) => {
                     self.ctx.move_to(p.x, p.y);
                     last = p;
                 }
-                PathEl::Lineto(p) => {
+                PathEl::LineTo(p) => {
                     self.ctx.line_to(p.x, p.y);
                     last = p;
                 }
-                PathEl::Quadto(p1, p2) => {
+                PathEl::QuadTo(p1, p2) => {
                     let q = QuadBez::new(last, p1, p2);
                     let c = q.raise();
                     self.ctx
                         .curve_to(c.p1.x, c.p1.y, c.p2.x, c.p2.y, p2.x, p2.y);
                     last = p2;
                 }
-                PathEl::Curveto(p1, p2, p3) => {
+                PathEl::CurveTo(p1, p2, p3) => {
                     self.ctx.curve_to(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y);
                     last = p3;
                 }
-                PathEl::Closepath => self.ctx.close_path(),
+                PathEl::ClosePath => self.ctx.close_path(),
             }
         }
     }

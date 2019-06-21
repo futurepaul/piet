@@ -2,9 +2,9 @@
 
 use direct2d::math::{ColorF, Matrix3x2F, Point2F, RectF};
 
-use kurbo::{Affine, Rect, Vec2};
+use piet::kurbo::{Affine, Point, Rect, Vec2};
 
-use piet::{Error, GradientStop, LineCap, LineJoin, RoundFrom, RoundInto, StrokeStyle};
+use piet::{Color, Error, GradientStop, LineCap, LineJoin, RoundFrom, RoundInto, StrokeStyle};
 
 use crate::error::WrapError;
 
@@ -40,6 +40,13 @@ impl RoundFrom<(f64, f64)> for Point2 {
     #[inline]
     fn round_from(vec: (f64, f64)) -> Point2 {
         Point2(Point2F::new(vec.0 as f32, vec.1 as f32))
+    }
+}
+
+impl RoundFrom<Point> for Point2 {
+    #[inline]
+    fn round_from(point: Point) -> Point2 {
+        Point2(Point2F::new(point.x as f32, point.y as f32))
     }
 }
 
@@ -83,14 +90,15 @@ pub(crate) fn rect_to_rectf(rect: Rect) -> RectF {
         .into()
 }
 
-pub(crate) fn rgba_to_colorf(rgba: u32) -> ColorF {
+pub(crate) fn color_to_colorf(color: Color) -> ColorF {
+    let rgba = color.as_rgba32();
     (rgba >> 8, ((rgba & 255) as f32) * (1.0 / 255.0)).into()
 }
 
 pub(crate) fn gradient_stop_to_d2d(stop: &GradientStop) -> direct2d::brush::gradient::GradientStop {
     direct2d::brush::gradient::GradientStop {
         position: stop.pos,
-        color: rgba_to_colorf(stop.rgba),
+        color: color_to_colorf(stop.color.clone()),
     }
 }
 

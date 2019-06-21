@@ -4,8 +4,8 @@ mod conv;
 pub mod error;
 
 use crate::conv::{
-    affine_to_matrix3x2f, convert_stroke_style, gradient_stop_to_d2d, rect_to_rectf,
-    rgba_to_colorf, to_point2f, Point2,
+    affine_to_matrix3x2f, color_to_colorf, convert_stroke_style, gradient_stop_to_d2d,
+    rect_to_rectf, to_point2f, Point2,
 };
 use crate::error::WrapError;
 
@@ -33,10 +33,10 @@ use directwrite::text_format::TextFormatBuilder;
 use directwrite::text_layout;
 use directwrite::TextFormat;
 
-use kurbo::{Affine, PathEl, Rect, Shape};
+use piet::kurbo::{Affine, PathEl, Rect, Shape};
 
 use piet::{
-    new_error, Error, ErrorKind, FillRule, Font, FontBuilder, Gradient, ImageFormat,
+    new_error, Color, Error, ErrorKind, FillRule, Font, FontBuilder, Gradient, ImageFormat,
     InterpolationMode, RenderContext, RoundInto, StrokeStyle, Text, TextLayout, TextLayoutBuilder,
 };
 
@@ -145,7 +145,7 @@ fn path_from_shape(
         let mut builder = Some(PathBuilder::Geom(g));
         for el in shape.to_bez_path(1e-3) {
             match el {
-                PathEl::Moveto(p) => {
+                PathEl::MoveTo(p) => {
                     // TODO: we don't know this now. Will get fixed in direct2d crate.
                     let is_closed = is_filled;
                     if let Some(b) = builder.take() {
@@ -164,20 +164,20 @@ fn path_from_shape(
                         builder = Some(PathBuilder::Fig(f));
                     }
                 }
-                PathEl::Lineto(p) => {
+                PathEl::LineTo(p) => {
                     if let Some(PathBuilder::Fig(f)) = builder.take() {
                         let f = f.add_line(to_point2f(p));
                         builder = Some(PathBuilder::Fig(f));
                     }
                 }
-                PathEl::Quadto(p1, p2) => {
+                PathEl::QuadTo(p1, p2) => {
                     if let Some(PathBuilder::Fig(f)) = builder.take() {
                         let q = QuadBezierSegment::new(to_point2f(p1), to_point2f(p2));
                         let f = f.add_quadratic_bezier(&q);
                         builder = Some(PathBuilder::Fig(f));
                     }
                 }
-                PathEl::Curveto(p1, p2, p3) => {
+                PathEl::CurveTo(p1, p2, p3) => {
                     if let Some(PathBuilder::Fig(f)) = builder.take() {
                         let c = BezierSegment::new(to_point2f(p1), to_point2f(p2), to_point2f(p3));
                         let f = f.add_bezier(&c);
@@ -210,18 +210,17 @@ impl<'a> RenderContext for D2DRenderContext<'a> {
         std::mem::replace(&mut self.err, Ok(()))
     }
 
-    fn clear(&mut self, rgb: u32) {
-        self.rt.clear(rgb);
+    fn clear(&mut self, color: Color) {
+        self.rt.clear(color.as_rgba32() >> 8);
     }
 
-    fn solid_brush(&mut self, rgba: u32) -> Result<GenericBrush, Error> {
-        Ok(
-            SolidColorBrush::create(&self.rt)
-                .with_color(rgba_to_colorf(rgba))
-                .build()
-                .wrap()?
-                .to_generic(), // This does an extra COM clone; avoid somehow?
-        )
+    fn solid_brush(&mut self, color: Color) -> GenericBrush {
+        SolidColorBrush::create(&self.rt)
+            .with_color(color_to_colorf(color))
+            .build()
+            .wrap()
+            .expect("error creating solid brush")
+            .to_generic() // This does an extra COM clone; avoid somehow?
     }
 
     fn gradient(&mut self, gradient: Gradient) -> Result<GenericBrush, Error> {

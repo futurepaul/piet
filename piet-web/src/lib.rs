@@ -10,11 +10,11 @@ use web_sys::{
     Window,
 };
 
-use kurbo::{Affine, PathEl, Rect, Shape, Vec2};
+use piet::kurbo::{Affine, PathEl, Rect, Shape, Vec2};
 
 use piet::{
-    Error, Font, FontBuilder, Gradient, GradientStop, ImageFormat, InterpolationMode, LineCap,
-    LineJoin, RenderContext, RoundInto, StrokeStyle, Text, TextLayout, TextLayoutBuilder,
+    Color, Error, Font, FontBuilder, Gradient, GradientStop, ImageFormat, InterpolationMode,
+    LineCap, LineJoin, RenderContext, RoundInto, StrokeStyle, Text, TextLayout, TextLayoutBuilder,
 };
 
 pub struct WebRenderContext<'a> {
@@ -142,12 +142,12 @@ impl<'a> RenderContext for WebRenderContext<'a> {
         std::mem::replace(&mut self.err, Ok(()))
     }
 
-    fn clear(&mut self, _rgb: u32) {
+    fn clear(&mut self, _color: Color) {
         // TODO: we might need to know the size of the canvas to do this.
     }
 
-    fn solid_brush(&mut self, rgba: u32) -> Result<Brush, Error> {
-        Ok(Brush::Solid(rgba))
+    fn solid_brush(&mut self, color: Color) -> Brush {
+        Brush::Solid(color.as_rgba32())
     }
 
     fn gradient(&mut self, gradient: Gradient) -> Result<Brush, Error> {
@@ -342,7 +342,8 @@ fn format_color(rgba: u32) -> String {
 fn set_gradient_stops(dst: &mut CanvasGradient, src: &[GradientStop]) {
     for stop in src {
         // TODO: maybe get error?
-        let _ = dst.add_color_stop(stop.pos, &format_color(stop.rgba));
+        let rgba = stop.color.as_rgba32();
+        let _ = dst.add_color_stop(stop.pos, &format_color(rgba));
     }
 }
 
@@ -455,13 +456,13 @@ impl<'a> WebRenderContext<'a> {
         self.ctx.begin_path();
         for el in shape.to_bez_path(1e-3) {
             match el {
-                PathEl::Moveto(p) => self.ctx.move_to(p.x, p.y),
-                PathEl::Lineto(p) => self.ctx.line_to(p.x, p.y),
-                PathEl::Quadto(p1, p2) => self.ctx.quadratic_curve_to(p1.x, p1.y, p2.x, p2.y),
-                PathEl::Curveto(p1, p2, p3) => {
+                PathEl::MoveTo(p) => self.ctx.move_to(p.x, p.y),
+                PathEl::LineTo(p) => self.ctx.line_to(p.x, p.y),
+                PathEl::QuadTo(p1, p2) => self.ctx.quadratic_curve_to(p1.x, p1.y, p2.x, p2.y),
+                PathEl::CurveTo(p1, p2, p3) => {
                     self.ctx.bezier_curve_to(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y)
                 }
-                PathEl::Closepath => self.ctx.close_path(),
+                PathEl::ClosePath => self.ctx.close_path(),
             }
         }
     }
