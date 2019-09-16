@@ -1,14 +1,17 @@
 //! The CoreGraphics backend for the Piet 2D graphics abstraction.
 
+use std::borrow::Cow;
+
+use core_graphics::base::CGFloat;
 use core_graphics::context::{CGContext, CGLineCap, CGLineJoin};
 use core_graphics::image::CGImage;
-use core_graphics::base::{CGFloat};
 
-use kurbo::{PathEl, Rect, Affine, QuadBez, Vec2, Shape};
+use piet::kurbo::{Affine, PathEl, Point, QuadBez, Rect, Shape};
 
 use piet::{
-    new_error, Error, ErrorKind, LineCap, LineJoin, FillRule, Font, FontBuilder, Gradient, ImageFormat,
-    InterpolationMode, RenderContext, RoundInto, StrokeStyle, Text, TextLayout, TextLayoutBuilder,
+    new_error, Color, Error, ErrorKind, FixedGradient, Font, FontBuilder, ImageFormat,
+    InterpolationMode, IntoBrush, LineCap, LineJoin, RenderContext, RoundInto, StrokeStyle, Text,
+    TextLayout, TextLayoutBuilder,
 };
 
 pub struct CoreGraphicsContext<'a> {
@@ -20,38 +23,39 @@ pub struct CoreGraphicsContext<'a> {
 
 impl<'a> CoreGraphicsContext<'a> {
     pub fn new(ctx: &mut CGContext) -> CoreGraphicsContext {
-        CoreGraphicsContext { ctx, text: CoreGraphicsText }
+        CoreGraphicsContext {
+            ctx,
+            text: CoreGraphicsText,
+        }
     }
 }
 
+#[derive(Clone)]
 pub enum Brush {
     Solid(u32),
 }
 
 pub struct CoreGraphicsFont;
-impl Font for CoreGraphicsFont {
-}
+impl Font for CoreGraphicsFont {}
 
 pub struct CoreGraphicsFontBuilder;
 
 impl FontBuilder for CoreGraphicsFontBuilder {
     type Out = CoreGraphicsFont;
 
-        fn build(self) -> Result<Self::Out, Error> {
-panic!()
-        }
+    fn build(self) -> Result<Self::Out, Error> {
+        panic!()
+    }
 }
 pub struct CoreGraphicsLayout;
 
 impl TextLayout for CoreGraphicsLayout {
-    type Coord = CGFloat;
-    fn width(&self) -> Self::Coord {
+    fn width(&self) -> f64 {
         panic!();
     }
 }
 
-pub struct CoreGraphicsTextLayoutBuilder {
-}
+pub struct CoreGraphicsTextLayoutBuilder {}
 
 impl TextLayoutBuilder for CoreGraphicsTextLayoutBuilder {
     type Out = CoreGraphicsLayout;
@@ -64,21 +68,16 @@ impl TextLayoutBuilder for CoreGraphicsTextLayoutBuilder {
 pub struct CoreGraphicsText;
 
 impl Text for CoreGraphicsText {
-    type Coord = CGFloat;
     type FontBuilder = CoreGraphicsFontBuilder;
     type Font = CoreGraphicsFont;
     type TextLayoutBuilder = CoreGraphicsTextLayoutBuilder;
     type TextLayout = CoreGraphicsLayout;
 
-    fn new_font_by_name(&mut self, name: &str, size: impl RoundInto<Self::Coord>,) -> Result<Self::FontBuilder, Error> {
+    fn new_font_by_name(&mut self, name: &str, size: f64) -> Self::FontBuilder {
         panic!()
     }
 
-       fn new_text_layout(
-        &mut self,
-        font: &Self::Font,
-        text: &str,
-    ) -> Result<Self::TextLayoutBuilder, Error> {
+    fn new_text_layout(&mut self, font: &Self::Font, text: &str) -> Self::TextLayoutBuilder {
         panic!()
     }
 }
@@ -124,65 +123,67 @@ impl StrokeStyle {
 }*/
 
 impl<'a> RenderContext for CoreGraphicsContext<'a> {
-    type Point = Vec2;
-    type Coord = f64;//XXX: this needs to be fixed for 32bit
     type Brush = Brush;
     type Text = CoreGraphicsText;
     type TextLayout = CoreGraphicsLayout;
     type Image = CGImage;
     //type StrokeStyle = StrokeStyle;
 
-    fn clear(&mut self, rgb: u32) {
+    fn clear(&mut self, color: Color) {
+        let rgba = color.as_rgba_u32();
         self.ctx.set_rgb_fill_color(
-            byte_to_frac(rgb >> 16),
-            byte_to_frac(rgb >> 8),
-            byte_to_frac(rgb),
+            byte_to_frac(rgba >> 24),
+            byte_to_frac(rgba >> 16),
+            byte_to_frac(rgba >> 8),
             1.0,
         );
         self.ctx.fill_rect(self.ctx.clip_bounding_box());
     }
 
-    fn solid_brush(&mut self, rgba: u32) -> Result<Brush, Error> {
-        Ok(Brush::Solid(rgba))
+    fn solid_brush(&mut self, color: Color) -> Brush {
+        Brush::Solid(color.as_rgba_u32())
     }
 
-    fn gradient(&mut self, gradient: Gradient) -> Result<Brush, Error> {
+    fn gradient(&mut self, gradient: impl Into<FixedGradient>) -> Result<Brush, Error> {
         unimplemented!()
     }
 
     /// Fill a shape.
-    fn fill(&mut self,
-        shape: impl Shape,
-        brush: &Self::Brush,
-        fill_rule: FillRule,
-    ) {
+    fn fill(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>) {
+        let brush = brush.make_brush(self, || shape.bounding_box());
         self.set_path(shape);
-        self.set_fill_brush(brush);
-        match fill_rule {
-            FillRule::NonZero => self.ctx.fill_path(),
-            FillRule::EvenOdd => self.ctx.eo_fill_path(),
-        }
+        self.set_brush(&*brush);
+        self.ctx.fill_path();
     }
 
-    fn clip(&mut self, shape: impl Shape, fill_rule: FillRule) {
+    fn fill_even_odd(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>) {
+        let brush = brush.make_brush(self, || shape.bounding_box());
         self.set_path(shape);
-        match fill_rule {
-            FillRule::NonZero => self.ctx.clip(),
-            FillRule::EvenOdd => self.ctx.eo_clip(),
-        }
+        self.set_brush(&*brush);
+        self.ctx.eo_fill_path();
     }
 
-    fn stroke(
+    fn clip(&mut self, shape: impl Shape) {
+        self.set_path(shape);
+        self.ctx.clip();
+    }
+
+    fn stroke(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>, width: f64) {
+        let brush = brush.make_brush(self, || shape.bounding_box());
+        self.set_path(shape);
+        self.set_stroke(width, None);
+        self.set_brush(&*brush);
+        self.ctx.stroke_path();
+    }
+
+    fn stroke_styled(
         &mut self,
         shape: impl Shape,
-        brush: &Self::Brush,
-        width: impl RoundInto<Self::Coord>,
-        style: Option<&StrokeStyle>,
+        brush: &impl IntoBrush<Self>,
+        width: f64,
+        style: &StrokeStyle,
     ) {
-        self.set_path(shape);
-        self.set_stroke(width.round_into(), style);
-        self.set_stroke_brush(brush);
-        self.ctx.stroke_path();
+        unimplemented!();
     }
 
     fn text(&mut self) -> &mut Self::Text {
@@ -192,8 +193,8 @@ impl<'a> RenderContext for CoreGraphicsContext<'a> {
     fn draw_text(
         &mut self,
         layout: &Self::TextLayout,
-        pos: impl RoundInto<Self::Point>,
-        brush: &Self::Brush,
+        pos: impl Into<Point>,
+        brush: &impl IntoBrush<Self>,
     ) {
         unimplemented!()
     }
@@ -227,16 +228,27 @@ impl<'a> RenderContext for CoreGraphicsContext<'a> {
     }
 
     fn draw_image(
-                  &mut self,
-                  image: &Self::Image,
-                  rect: impl Into<Rect>,
-                  interp: InterpolationMode,
-                 ) {
+        &mut self,
+        image: &Self::Image,
+        rect: impl Into<Rect>,
+        interp: InterpolationMode,
+    ) {
         unimplemented!()
     }
 
     fn status(&mut self) -> Result<(), Error> {
         unimplemented!()
+    }
+}
+
+// TODO copy / pasted this from cairo
+impl<'a> IntoBrush<CoreGraphicsContext<'a>> for Brush {
+    fn make_brush<'b>(
+        &'b self,
+        _piet: &mut CoreGraphicsContext,
+        _bbox: impl FnOnce() -> Rect,
+    ) -> std::borrow::Cow<'b, Brush> {
+        Cow::Borrowed(self)
     }
 }
 
@@ -272,7 +284,7 @@ impl<'a> CoreGraphicsContext<'a> {
         }
     }
 
-    fn set_stroke_brush(&mut self, brush: &Brush) {
+    fn set_brush(&mut self, brush: &Brush) {
         match *brush {
             Brush::Solid(rgba) => self.ctx.set_rgb_stroke_color(
                 byte_to_frac(rgba >> 24),
@@ -310,33 +322,33 @@ impl<'a> CoreGraphicsContext<'a> {
         // This shouldn't be necessary, we always leave the context in no-path
         // state. But just in case, and it should be harmless.
         self.ctx.begin_path();
-        let mut last = Vec2::default();
+        let mut last = Point::ZERO;
         for el in shape.to_bez_path(1e-3) {
             match el {
-                PathEl::Moveto(p) => {
+                PathEl::MoveTo(p) => {
                     self.ctx.move_to_point(p.x, p.y);
                     last = p;
                 }
-                PathEl::Lineto(p) => {
+                PathEl::LineTo(p) => {
                     self.ctx.add_line_to_point(p.x, p.y);
                     last = p;
                 }
-                PathEl::Quadto(p1, p2) => {
+                PathEl::QuadTo(p1, p2) => {
                     let q = QuadBez::new(last, p1, p2);
                     let c = q.raise();
                     self.ctx
                         .add_curve_to_point(c.p1.x, c.p1.y, c.p2.x, c.p2.y, p2.x, p2.y);
                     last = p2;
                 }
-                PathEl::Curveto(p1, p2, p3) => {
-                    self.ctx.add_curve_to_point(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y);
+                PathEl::CurveTo(p1, p2, p3) => {
+                    self.ctx
+                        .add_curve_to_point(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y);
                     last = p3;
                 }
-                PathEl::Closepath => self.ctx.close_path(),
+                PathEl::ClosePath => self.ctx.close_path(),
             }
         }
     }
-
 }
 
 fn byte_to_frac(byte: u32) -> f64 {
