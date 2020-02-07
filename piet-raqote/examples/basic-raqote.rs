@@ -2,7 +2,7 @@ use piet_raqote::RaqoteRenderContext;
 
 use piet_test::draw_test_picture;
 
-use raqote::{DrawOptions, DrawTarget, PathBuilder, SolidSource, Source};
+use raqote::{DrawTarget, SolidSource};
 
 const TEXTURE_WIDTH: i32 = 200;
 const TEXTURE_HEIGHT: i32 = 100;

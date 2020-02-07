@@ -1,11 +1,15 @@
 //! The Raqote backend for the Piet 2D graphics abstraction.
 
 // TODO: dpi scaling!!
+
+use std::borrow::Cow;
+
 use raqote::{
-    Spread, ExtendMode, DrawOptions, DrawTarget, Path, PathBuilder, Point, SolidSource, Source, Transform, Winding,
+    Color as RaqoteColor, DrawOptions, DrawTarget, ExtendMode, FilterMode, Path, PathBuilder,
+    Point, SolidSource, Source, Spread, Transform, Winding,
 };
 
-use piet::kurbo::{Affine, PathEl, Rect, Shape, Vec2};
+use piet::kurbo::{Affine, PathEl, Point as PietPoint, Rect, Shape, Vec2};
 
 use font_kit::family_name::FamilyName;
 use font_kit::properties::Properties;
@@ -14,9 +18,10 @@ use font_kit::source::SystemSource;
 use skribo::{make_layout, FontRef, Layout, TextStyle};
 
 use piet::{
-    new_error, Error, ErrorKind, FillRule, Font, FontBuilder, Gradient, GradientStop, ImageFormat,
-    InterpolationMode, LineCap, LineJoin, RenderContext, RoundFrom, RoundInto, StrokeStyle, Text,
-    TextLayout, TextLayoutBuilder, Color,
+    new_error, Color, Error, ErrorKind, FixedGradient, Font, FontBuilder, GradientStop,
+    HitTestPoint, HitTestTextPosition, ImageFormat, InterpolationMode, IntoBrush, LineCap,
+    LineJoin, RenderContext, RoundFrom, RoundInto, StrokeStyle, Text, TextLayout,
+    TextLayoutBuilder,
 };
 
 #[derive(Default)]
@@ -87,7 +92,7 @@ pub struct InternalImage {
 pub struct RaqotePoint(pub Point);
 
 fn split_rgba(rgba: Color) -> (u8, u8, u8, u8) {
-    let rgba = rgba.as_rgba32();
+    let rgba = rgba.as_rgba_u32();
     (
         (rgba >> 24) as u8,
         ((rgba >> 16) & 255) as u8,
@@ -129,9 +134,9 @@ fn affine_to_transform(affine: Affine) -> Transform {
     )
 }
 
-// Convert a RGBA u32 to a ARBG u32
-fn rgba_to_arbg(rgba: u32) -> u32 {
-    (rgba << 24) | (rgba >> 8)
+fn piet_color_to_raqote(color: Color) -> RaqoteColor {
+    let c = split_rgba(color);
+    RaqoteColor::new(c.3, c.0, c.1, c.2)
 }
 
 fn transform_image_to_rect(rect: Rect, image: &raqote::Image) -> Transform {
@@ -139,9 +144,9 @@ fn transform_image_to_rect(rect: Rect, image: &raqote::Image) -> Transform {
 
     dbg!(rect.width());
     dbg!(image.width);
-    let rect_width = rect.width();
-    let rect_height = rect.height();
-// 1 - (16 * 40 / 1000)
+    // let rect_width = rect.width();
+    // let rect_height = rect.height();
+    // 1 - (16 * 40 / 1000)
     let scale_width = (1. - (image.width as f64 * rect.width() / 1000.)) as f32;
     let scale_height = (1. - (image.height as f64 * rect.height() / 1000.)) as f32;
 
@@ -153,11 +158,11 @@ fn transform_image_to_rect(rect: Rect, image: &raqote::Image) -> Transform {
 
     let scale = Transform::create_scale(scale_width, scale_height);
 
-
     dbg!(scale_width * image.width as f32);
 
     // TODO: Move `inverse()` to Raqote
-    translate.post_mul(&scale)
+    // It used to be: translate.post_mul(&scale)
+    translate.post_transform(&scale)
 }
 
 fn shape_to_path(shape: impl Shape) -> Path {
@@ -197,18 +202,27 @@ fn convert_gradient_stops(stops: Vec<GradientStop>) -> Vec<raqote::GradientStop>
         .iter()
         .map(|stop| raqote::GradientStop {
             position: stop.pos,
-            color: rgba_to_arbg(stop.color.as_rgba32()),
+            color: piet_color_to_raqote(stop.color.clone()),
         })
         .collect()
 }
 
-impl<'a> RenderContext for RaqoteRenderContext<'a> {
-    // TODO: this should be a raqote Point (might have to wrap to impl as f32)
-    type Point = RaqotePoint;
-    type Coord = f32;
+#[derive(Clone)]
+pub struct RaqoteBrush<'a>(Source<'a>);
 
+impl<'a> IntoBrush<RaqoteRenderContext<'a>> for RaqoteBrush<'a> {
+    fn make_brush<'b>(
+        &'b self,
+        _piet: &mut RaqoteRenderContext,
+        _bbox: impl FnOnce() -> Rect,
+    ) -> std::borrow::Cow<'b, RaqoteBrush<'a>> {
+        Cow::Borrowed(self)
+    }
+}
+
+impl<'a> RenderContext for RaqoteRenderContext<'a> {
     // The render context must outlive the brush
-    type Brush = Source<'a>;
+    type Brush = RaqoteBrush<'a>;
 
     //QUESTION Text should of type TextLayout??
     // type Text: Text<TextLayout = Self::TextLayout>;
@@ -224,33 +238,37 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
 
     fn solid_brush(&mut self, rgba: Color) -> Self::Brush {
         let (r, g, b, a) = split_rgba(rgba);
-        Source::Solid(SolidSource { r, g, b, a })
+        RaqoteBrush(Source::Solid(SolidSource { r, g, b, a }))
     }
 
-    fn gradient(&mut self, gradient: Gradient) -> Result<Self::Brush, Error> {
-        match gradient {
-            Gradient::Linear(gradient) => {
+    fn current_transform(&self) -> Affine {
+        self.current_transform()
+    }
+
+    fn gradient(&mut self, gradient: impl Into<FixedGradient>) -> Result<Self::Brush, Error> {
+        match gradient.into() {
+            FixedGradient::Linear(gradient) => {
                 let stops = convert_gradient_stops(gradient.stops);
                 let start = to_point((gradient.start.x, gradient.start.y));
                 let end = to_point((gradient.end.x, gradient.end.y));
 
-                Ok(Source::new_linear_gradient(
+                Ok(RaqoteBrush(Source::new_linear_gradient(
                     raqote::Gradient { stops },
                     start,
                     end,
-                    Spread::Pad
-                ))
+                    Spread::Pad,
+                )))
             }
-            Gradient::Radial(gradient) => {
+            FixedGradient::Radial(gradient) => {
                 let stops = convert_gradient_stops(gradient.stops);
                 let center = to_point((gradient.center.x, gradient.center.y));
 
-                Ok(Source::new_radial_gradient(
+                Ok(RaqoteBrush(Source::new_radial_gradient(
                     raqote::Gradient { stops },
                     center,
                     gradient.radius as f32,
-                    Spread::Pad
-                ))
+                    Spread::Pad,
+                )))
             }
         }
     }
@@ -262,35 +280,49 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         self.draw_target.clear(source);
     }
 
-    fn stroke(
+    fn stroke(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>, width: f64) {
+        let brush = brush.make_brush(self, || shape.bounding_box());
+        let path = shape_to_path(shape);
+
+        let mut stroke_style = raqote::StrokeStyle::default();
+
+        stroke_style.width = width.round_into();
+
+        self.draw_target
+            .stroke(&path, &brush.0, &stroke_style, &DrawOptions::default());
+    }
+
+    fn stroke_styled(
         &mut self,
         shape: impl Shape,
-        brush: &Self::Brush,
-        width: impl RoundInto<Self::Coord>,
-        style: Option<&StrokeStyle>,
+        brush: &impl IntoBrush<Self>,
+        width: f64,
+        style: &StrokeStyle,
     ) {
+        let brush = brush.make_brush(self, || shape.bounding_box());
         let path = shape_to_path(shape);
 
         // TODO: Factor this out
         let cap = style
-            .and_then(|style| style.line_cap)
+            .line_cap
             .map(convert_line_cap)
             .unwrap_or(raqote::LineCap::Butt);
 
         let join = style
-            .and_then(|style| style.line_join)
+            .line_join
             .map(convert_line_join)
             .unwrap_or(raqote::LineJoin::Miter);
 
         let width = width.round_into();
 
         let miter_limit = style
-            .and_then(|style| style.miter_limit)
+            .miter_limit
             .map(|miter_limit| miter_limit as f32)
             .unwrap_or(10.0);
 
         let (dash_array, dash_offset) = style
-            .and_then(|style| style.dash.as_ref())
+            .dash
+            .as_ref()
             .map(convert_dash)
             .unwrap_or_else(|| (vec![], 0.0));
 
@@ -304,28 +336,35 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         };
 
         self.draw_target
-            .stroke(&path, brush, &stroke_style, &DrawOptions::default());
+            .stroke(&path, &brush.0, &stroke_style, &DrawOptions::default());
     }
 
-    fn fill(&mut self, shape: impl Shape, brush: &Self::Brush, fill_rule: FillRule) {
+    fn fill(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>) {
+        let brush = brush.make_brush(self, || shape.bounding_box());
         let mut path = shape_to_path(shape);
 
-        path.winding = match fill_rule {
-            FillRule::EvenOdd => Winding::EvenOdd,
-            FillRule::NonZero => Winding::NonZero,
-        };
+        path.winding = Winding::NonZero;
 
-        self.draw_target.fill(&path, brush, &DrawOptions::default());
+        //TODO: &brush.0 doesn't feel right but it's the only thing
+        //I can get working
+        self.draw_target
+            .fill(&path, &brush.0, &DrawOptions::default());
     }
 
-    fn clip(&mut self, shape: impl Shape, fill_rule: FillRule) {
+    fn fill_even_odd(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>) {
+        let brush = brush.make_brush(self, || shape.bounding_box());
         let mut path = shape_to_path(shape);
 
-        path.winding = match fill_rule {
-            FillRule::EvenOdd => Winding::EvenOdd,
-            FillRule::NonZero => Winding::NonZero,
-        };
+        path.winding = Winding::EvenOdd;
 
+        self.draw_target
+            .fill(&path, &brush.0, &DrawOptions::default());
+    }
+
+    fn clip(&mut self, shape: impl Shape) {
+        let mut path = shape_to_path(shape);
+
+        path.winding = Winding::NonZero;
         //QUESTION we don't ever pop clip I hope that's okay?
         self.draw_target.push_clip(&path);
     }
@@ -339,10 +378,12 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
     fn draw_text(
         &mut self,
         layout: &Self::TextLayout,
-        pos: impl RoundInto<Self::Point>,
-        brush: &Self::Brush,
+        pos: impl Into<PietPoint>,
+        brush: &impl IntoBrush<Self>,
     ) {
-        let pos = to_point(pos);
+        let brush = brush.make_brush(self, || Rect::ZERO);
+
+        let pos = to_point(pos.into());
 
         let positions = layout
             .layout
@@ -363,7 +404,7 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
             layout.font.size,
             &glyphs,
             &positions,
-            brush,
+            &brush.0,
             &DrawOptions::default(),
         );
     }
@@ -475,7 +516,12 @@ impl<'a> RenderContext for RaqoteRenderContext<'a> {
         self.draw_target.fill(
             &path,
             //TODO figure out why scaling is off
-            &Source::Image(raqote_image, ExtendMode::Repeat, transform),
+            &Source::Image(
+                raqote_image,
+                ExtendMode::Repeat,
+                FilterMode::Bilinear,
+                transform,
+            ),
             &DrawOptions::default(),
         );
         // self.draw_target.draw_image_at(rect.x0 as f32, rect.y0 as f32, &raqote_image, &DrawOptions::default());
@@ -523,35 +569,25 @@ impl From<RaqotePoint> for Vec2 {
 }
 
 impl Text for RaqoteText {
-    type Coord = f32;
-
     type Font = RaqoteFont;
     type FontBuilder = RaqoteFontBuilder;
     type TextLayout = RaqoteTextLayout;
     type TextLayoutBuilder = RaqoteTextLayoutBuilder;
 
-    fn new_font_by_name(
-        &mut self,
-        name: &str,
-        size: impl RoundInto<Self::Coord>,
-    ) -> Result<Self::FontBuilder, Error> {
-        Ok(RaqoteFontBuilder {
+    fn new_font_by_name(&mut self, name: &str, size: f64) -> Self::FontBuilder {
+        RaqoteFontBuilder {
             family: name.to_owned(),
             size: size.round_into(),
             properties: Properties::new(),
-        })
+        }
     }
 
-    fn new_text_layout(
-        &mut self,
-        font: &Self::Font,
-        text: &str,
-    ) -> Result<Self::TextLayoutBuilder, Error> {
-        Ok(RaqoteTextLayoutBuilder {
+    fn new_text_layout(&mut self, font: &Self::Font, text: &str) -> Self::TextLayoutBuilder {
+        RaqoteTextLayoutBuilder {
             font: font.clone(),
             // TODO: Store a reference?
             text: text.to_owned(),
-        })
+        }
     }
 }
 
@@ -600,9 +636,15 @@ impl TextLayoutBuilder for RaqoteTextLayoutBuilder {
 }
 
 impl TextLayout for RaqoteTextLayout {
-    type Coord = f32;
+    fn width(&self) -> f64 {
+        self.layout.advance.x.into()
+    }
 
-    fn width(&self) -> f32 {
-        self.layout.advance.x
+    fn hit_test_point(&self, _point: PietPoint) -> HitTestPoint {
+        HitTestPoint::default()
+    }
+
+    fn hit_test_text_position(&self, _text_position: usize) -> Option<HitTestTextPosition> {
+        None
     }
 }

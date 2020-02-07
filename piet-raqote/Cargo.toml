@@ -9,11 +9,11 @@ keywords = ["graphics", "2d"]
 categories = ["rendering::graphics-api"]
 
 [dependencies]
-piet = { version = "0.0.3", path = "../piet" }
-raqote = { git="https://github.com/jrmuizel/raqote", branch="master" }
-font-kit = "0.3.1"
-skribo = { git="https://github.com/futurepaul/skribo" }
+piet = { version = "0.0.9", path = "../piet" }
+raqote = { git="https://github.com/jrmuizel/raqote"}
+font-kit = "0.5"
+skribo = { git="https://github.com/linebender/skribo" }
 
 [dev-dependencies]
-piet-test = { version = "0.0.3", path = "../piet-test" }
+piet-test = { version = "0.0.9", path = "../piet-test" }
 image = "0.20.1"
