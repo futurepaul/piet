@@ -1,9 +1,12 @@
 //! The main render context trait.
 
-use kurbo::{Affine, Rect, Shape, Vec2};
+use std::borrow::Cow;
+
+use kurbo::{Affine, Point, Rect, Shape};
 
 use crate::{
-    Color, Error, FillRule, Gradient, RoundFrom, RoundInto, StrokeStyle, Text, TextLayout,
+    Color, Error, FixedGradient, FixedLinearGradient, FixedRadialGradient, LinearGradient,
+    RadialGradient, StrokeStyle, Text, TextLayout,
 };
 
 /// A requested interpolation mode for drawing images.
@@ -50,23 +53,14 @@ impl ImageFormat {
 /// can implement this trait.
 ///
 /// Code that draws graphics will in general take `&mut impl RenderContext`.
-pub trait RenderContext {
-    /// The type of a 2D point, for this backend.
-    ///
-    /// Generally this needs to be a newtype so that the `RoundFrom` traits
-    /// can be implemented on it. Possibly this can be relaxed in the future,
-    /// as we move towards a standard `RoundFrom`.
-    type Point: Into<Vec2> + RoundFrom<Vec2> + RoundFrom<(f32, f32)> + RoundFrom<(f64, f64)>;
-
-    /// The type of 1D measurements, for example stroke width.
-    ///
-    /// Generally this will be either f32 or f64.
-    type Coord: Into<f64> + RoundFrom<f64>;
-
+pub trait RenderContext
+where
+    Self::Brush: IntoBrush<Self>,
+{
     /// The type of a "brush".
     ///
-    /// Initially just a solid RGBA color, but will probably expand to gradients.
-    type Brush;
+    /// Represents solid colors and gradients.
+    type Brush: Clone;
 
     /// An associated factory for creating text layouts and related resources.
     type Text: Text<TextLayout = Self::TextLayout>;
@@ -86,13 +80,13 @@ pub trait RenderContext {
     ///
     /// TODO: figure out how to document lifetime and rebuilding requirements. Should
     /// that be the responsibility of the client, or should the back-end take
-    /// responsiblity? We could have a cache that is flushed when the Direct2D
+    /// responsibility? We could have a cache that is flushed when the Direct2D
     /// render target is rebuilt. Solid brushes are super lightweight, but
     /// other potentially retained objects will be heavier.
     fn solid_brush(&mut self, color: Color) -> Self::Brush;
 
     /// Create a new gradient brush.
-    fn gradient(&mut self, gradient: Gradient) -> Result<Self::Brush, Error>;
+    fn gradient(&mut self, gradient: impl Into<FixedGradient>) -> Result<Self::Brush, Error>;
 
     /// Clear the canvas with the given color.
     ///
@@ -100,25 +94,28 @@ pub trait RenderContext {
     fn clear(&mut self, color: Color);
 
     /// Stroke a shape.
-    fn stroke(
+    fn stroke(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>, width: f64);
+
+    /// Stroke a shape, with styled strokes.
+    fn stroke_styled(
         &mut self,
         shape: impl Shape,
-        brush: &Self::Brush,
-        width: impl RoundInto<Self::Coord>,
-        style: Option<&StrokeStyle>,
+        brush: &impl IntoBrush<Self>,
+        width: f64,
+        style: &StrokeStyle,
     );
 
-    /// Fill a shape.
+    /// Fill a shape, using non-zero fill rule.
+    fn fill(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>);
 
-    // TODO: switch last two argument order to be more similar to clip? Maybe we
-    // should have a convention, geometry first.
-    fn fill(&mut self, shape: impl Shape, brush: &Self::Brush, fill_rule: FillRule);
+    /// Fill a shape, using even-odd fill rule
+    fn fill_even_odd(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>);
 
     /// Clip to a shape.
     ///
     /// All subsequent drawing operations up to the next [`restore`](#method.restore)
     /// are clipped by the shape.
-    fn clip(&mut self, shape: impl Shape, fill_rule: FillRule);
+    fn clip(&mut self, shape: impl Shape);
 
     fn text(&mut self) -> &mut Self::Text;
 
@@ -129,8 +126,8 @@ pub trait RenderContext {
     fn draw_text(
         &mut self,
         layout: &Self::TextLayout,
-        pos: impl RoundInto<Self::Point>,
-        brush: &Self::Brush,
+        pos: impl Into<Point>,
+        brush: &impl IntoBrush<Self>,
     );
 
     /// Save the context state.
@@ -188,4 +185,109 @@ pub trait RenderContext {
     /// The image is scaled to the provided `rect`. It will be squashed if
     /// aspect ratios don't match.
     fn draw_image(&mut self, image: &Self::Image, rect: impl Into<Rect>, interp: InterpolationMode);
+
+    /// Returns the transformations currently applied to the context.
+    fn current_transform(&self) -> Affine;
+}
+
+/// A trait for various types that can be used as brushes. These include
+/// backend-independent types such `Color` and `LinearGradient`, as well
+/// as the types used to represent these on a specific backend.
+///
+/// This is an internal trait that you should not have to implement or think about.
+pub trait IntoBrush<P: RenderContext>
+where
+    P: ?Sized,
+{
+    fn make_brush<'a>(&'a self, piet: &mut P, bbox: impl FnOnce() -> Rect) -> Cow<'a, P::Brush>;
+}
+
+impl<P: RenderContext> IntoBrush<P> for Color {
+    fn make_brush<'a>(&'a self, piet: &mut P, _bbox: impl FnOnce() -> Rect) -> Cow<'a, P::Brush> {
+        Cow::Owned(piet.solid_brush(self.to_owned()))
+    }
+}
+
+/// A color or a gradient.
+///
+/// This type is provided as a convenience, so that library consumers can
+/// easily write methods and types that use or reference *something* that can
+/// be used as a brush, without needing to know what it is.
+///
+/// # Examples
+///
+/// ```no_run
+/// use piet::{Color, PaintBrush, RadialGradient};
+/// use piet::kurbo::Rect;
+///
+/// struct Widget {
+/// frame: Rect,
+/// background: PaintBrush,
+/// }
+///
+/// fn make_widget<T: Into<PaintBrush>>(frame: Rect, bg: T) -> Widget {
+///     Widget {
+///         frame,
+///         background: bg.into(),
+///     }
+/// }
+///
+/// let color_widget = make_widget(Rect::ZERO, Color::BLACK);
+/// let rad_grad = RadialGradient::new(0.8, (Color::WHITE, Color::BLACK));
+/// let gradient_widget = make_widget(Rect::ZERO, rad_grad);
+///
+/// ```
+#[derive(Debug, Clone)]
+pub enum PaintBrush {
+    Color(Color),
+    Linear(LinearGradient),
+    Radial(RadialGradient),
+    Fixed(FixedGradient),
+}
+
+impl<P: RenderContext> IntoBrush<P> for PaintBrush {
+    fn make_brush<'a>(&'a self, piet: &mut P, bbox: impl FnOnce() -> Rect) -> Cow<'a, P::Brush> {
+        match self {
+            PaintBrush::Color(color) => color.make_brush(piet, bbox),
+            PaintBrush::Linear(linear) => linear.make_brush(piet, bbox),
+            PaintBrush::Radial(radial) => radial.make_brush(piet, bbox),
+            PaintBrush::Fixed(fixed) => fixed.make_brush(piet, bbox),
+        }
+    }
+}
+
+impl From<Color> for PaintBrush {
+    fn from(src: Color) -> PaintBrush {
+        PaintBrush::Color(src)
+    }
+}
+
+impl From<LinearGradient> for PaintBrush {
+    fn from(src: LinearGradient) -> PaintBrush {
+        PaintBrush::Linear(src)
+    }
+}
+
+impl From<RadialGradient> for PaintBrush {
+    fn from(src: RadialGradient) -> PaintBrush {
+        PaintBrush::Radial(src)
+    }
+}
+
+impl From<FixedGradient> for PaintBrush {
+    fn from(src: FixedGradient) -> PaintBrush {
+        PaintBrush::Fixed(src)
+    }
+}
+
+impl From<FixedLinearGradient> for PaintBrush {
+    fn from(src: FixedLinearGradient) -> PaintBrush {
+        PaintBrush::Fixed(src.into())
+    }
+}
+
+impl From<FixedRadialGradient> for PaintBrush {
+    fn from(src: FixedRadialGradient) -> PaintBrush {
+        PaintBrush::Fixed(src.into())
+    }
 }

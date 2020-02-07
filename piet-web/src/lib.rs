@@ -1,7 +1,9 @@
 //! The Web Canvas backend for the Piet 2D graphics abstraction.
+mod grapheme;
 
 use std::borrow::Cow;
 use std::fmt;
+use std::ops::Deref;
 
 use js_sys::{Float64Array, Reflect};
 use wasm_bindgen::{Clamped, JsCast, JsValue};
@@ -10,12 +12,16 @@ use web_sys::{
     Window,
 };
 
-use piet::kurbo::{Affine, PathEl, Rect, Shape, Vec2};
+use piet::kurbo::{Affine, PathEl, Point, Rect, Shape};
 
 use piet::{
-    Color, Error, Font, FontBuilder, Gradient, GradientStop, ImageFormat, InterpolationMode,
-    LineCap, LineJoin, RenderContext, RoundInto, StrokeStyle, Text, TextLayout, TextLayoutBuilder,
+    Color, Error, FixedGradient, Font, FontBuilder, GradientStop, HitTestMetrics, HitTestPoint,
+    HitTestTextPosition, ImageFormat, InterpolationMode, IntoBrush, LineCap, LineJoin,
+    RenderContext, StrokeStyle, Text, TextLayout, TextLayoutBuilder,
 };
+use unicode_segmentation::UnicodeSegmentation;
+
+use crate::grapheme::point_x_in_grapheme;
 
 pub struct WebRenderContext<'a> {
     ctx: &'a mut CanvasRenderingContext2d,
@@ -34,6 +40,7 @@ impl<'a> WebRenderContext<'a> {
     }
 }
 
+#[derive(Clone)]
 pub enum Brush {
     Solid(u32),
     Gradient(CanvasGradient),
@@ -50,9 +57,9 @@ pub struct WebFont {
 pub struct WebFontBuilder(WebFont);
 
 pub struct WebTextLayout {
+    ctx: CanvasRenderingContext2d,
     font: WebFont,
     text: String,
-    width: f64,
 }
 
 pub struct WebTextLayoutBuilder {
@@ -104,13 +111,6 @@ impl<T> WrapError<T> for Result<T, JsValue> {
     }
 }
 
-fn convert_fill_rule(fill_rule: piet::FillRule) -> CanvasWindingRule {
-    match fill_rule {
-        piet::FillRule::NonZero => CanvasWindingRule::Nonzero,
-        piet::FillRule::EvenOdd => CanvasWindingRule::Evenodd,
-    }
-}
-
 fn convert_line_cap(line_cap: LineCap) -> &'static str {
     match line_cap {
         LineCap::Butt => "butt",
@@ -129,8 +129,6 @@ fn convert_line_join(line_join: LineJoin) -> &'static str {
 
 impl<'a> RenderContext for WebRenderContext<'a> {
     /// wasm-bindgen doesn't have a native Point type, so use kurbo's.
-    type Point = Vec2;
-    type Coord = f64;
     type Brush = Brush;
 
     type Text = Self;
@@ -142,24 +140,32 @@ impl<'a> RenderContext for WebRenderContext<'a> {
         std::mem::replace(&mut self.err, Ok(()))
     }
 
-    fn clear(&mut self, _color: Color) {
-        // TODO: we might need to know the size of the canvas to do this.
+    fn clear(&mut self, color: Color) {
+        let (width, height) = match self.ctx.canvas() {
+            Some(canvas) => (canvas.width(), canvas.height()),
+            None => return,
+            /* Canvas might be null if the dom node is not in
+             * the document; do nothing. */
+        };
+        let shape = Rect::new(0.0, 0.0, width as f64, height as f64);
+        let brush = self.solid_brush(color);
+        self.fill(shape, &brush);
     }
 
     fn solid_brush(&mut self, color: Color) -> Brush {
-        Brush::Solid(color.as_rgba32())
+        Brush::Solid(color.as_rgba_u32())
     }
 
-    fn gradient(&mut self, gradient: Gradient) -> Result<Brush, Error> {
-        match gradient {
-            Gradient::Linear(linear) => {
+    fn gradient(&mut self, gradient: impl Into<FixedGradient>) -> Result<Brush, Error> {
+        match gradient.into() {
+            FixedGradient::Linear(linear) => {
                 let (x0, y0) = (linear.start.x, linear.start.y);
                 let (x1, y1) = (linear.end.x, linear.end.y);
                 let mut lg = self.ctx.create_linear_gradient(x0, y0, x1, y1);
                 set_gradient_stops(&mut lg, &linear.stops);
                 Ok(Brush::Gradient(lg))
             }
-            Gradient::Radial(radial) => {
+            FixedGradient::Radial(radial) => {
                 let (xc, yc) = (radial.center.x, radial.center.y);
                 let (xo, yo) = (radial.origin_offset.x, radial.origin_offset.y);
                 let r = radial.radius;
@@ -173,29 +179,47 @@ impl<'a> RenderContext for WebRenderContext<'a> {
         }
     }
 
-    fn fill(&mut self, shape: impl Shape, brush: &Self::Brush, fill_rule: piet::FillRule) {
+    fn fill(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>) {
+        let brush = brush.make_brush(self, || shape.bounding_box());
         self.set_path(shape);
-        self.set_brush(brush, true);
+        self.set_brush(&*brush, true);
         self.ctx
-            .fill_with_canvas_winding_rule(convert_fill_rule(fill_rule));
+            .fill_with_canvas_winding_rule(CanvasWindingRule::Nonzero);
     }
 
-    fn clip(&mut self, shape: impl Shape, fill_rule: piet::FillRule) {
+    fn fill_even_odd(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>) {
+        let brush = brush.make_brush(self, || shape.bounding_box());
         self.set_path(shape);
+        self.set_brush(&*brush, true);
         self.ctx
-            .clip_with_canvas_winding_rule(convert_fill_rule(fill_rule));
+            .fill_with_canvas_winding_rule(CanvasWindingRule::Evenodd);
     }
 
-    fn stroke(
+    fn clip(&mut self, shape: impl Shape) {
+        self.set_path(shape);
+        self.ctx
+            .clip_with_canvas_winding_rule(CanvasWindingRule::Nonzero);
+    }
+
+    fn stroke(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>, width: f64) {
+        let brush = brush.make_brush(self, || shape.bounding_box());
+        self.set_path(shape);
+        self.set_stroke(width, None);
+        self.set_brush(&*brush.deref(), false);
+        self.ctx.stroke();
+    }
+
+    fn stroke_styled(
         &mut self,
         shape: impl Shape,
-        brush: &Self::Brush,
-        width: impl RoundInto<Self::Coord>,
-        style: Option<&StrokeStyle>,
+        brush: &impl IntoBrush<Self>,
+        width: f64,
+        style: &StrokeStyle,
     ) {
+        let brush = brush.make_brush(self, || shape.bounding_box());
         self.set_path(shape);
-        self.set_stroke(width.round_into(), style);
-        self.set_brush(brush, false);
+        self.set_stroke(width, Some(style));
+        self.set_brush(&*brush.deref(), false);
         self.ctx.stroke();
     }
 
@@ -206,12 +230,14 @@ impl<'a> RenderContext for WebRenderContext<'a> {
     fn draw_text(
         &mut self,
         layout: &Self::TextLayout,
-        pos: impl RoundInto<Self::Point>,
-        brush: &Self::Brush,
+        pos: impl Into<Point>,
+        brush: &impl IntoBrush<Self>,
     ) {
+        // TODO: bounding box for text
+        let brush = brush.make_brush(self, || Rect::ZERO);
         self.ctx.set_font(&layout.font.get_font_string());
-        self.set_brush(brush, true);
-        let pos = pos.round_into();
+        self.set_brush(&*brush, true);
+        let pos = pos.into();
         if let Err(e) = self.ctx.fill_text(&layout.text, pos.x, pos.y).wrap() {
             self.err = Err(e);
         }
@@ -234,6 +260,13 @@ impl<'a> RenderContext for WebRenderContext<'a> {
     fn transform(&mut self, transform: Affine) {
         let a = transform.as_coeffs();
         let _ = self.ctx.transform(a[0], a[1], a[2], a[3], a[4], a[5]);
+    }
+
+    fn current_transform(&self) -> Affine {
+        // todo
+        // current_transform() and get_transform() currently not implemented:
+        // https://github.com/rustwasm/wasm-bindgen/blob/f8354b3a88de013845a304ea77d8b9b9286a0d7b/crates/web-sys/webidls/enabled/CanvasRenderingContext2D.webidl#L136
+        Affine::default()
     }
 
     fn make_image(
@@ -323,6 +356,16 @@ impl<'a> RenderContext for WebRenderContext<'a> {
     }
 }
 
+impl<'a> IntoBrush<WebRenderContext<'a>> for Brush {
+    fn make_brush<'b>(
+        &'b self,
+        _piet: &mut WebRenderContext,
+        _bbox: impl FnOnce() -> Rect,
+    ) -> std::borrow::Cow<'b, Brush> {
+        Cow::Borrowed(self)
+    }
+}
+
 fn format_color(rgba: u32) -> String {
     let rgb = rgba >> 8;
     let a = rgba & 0xff;
@@ -342,45 +385,35 @@ fn format_color(rgba: u32) -> String {
 fn set_gradient_stops(dst: &mut CanvasGradient, src: &[GradientStop]) {
     for stop in src {
         // TODO: maybe get error?
-        let rgba = stop.color.as_rgba32();
+        let rgba = stop.color.as_rgba_u32();
         let _ = dst.add_color_stop(stop.pos, &format_color(rgba));
     }
 }
 
 impl<'a> Text for WebRenderContext<'a> {
-    type Coord = f64;
-
     type Font = WebFont;
     type FontBuilder = WebFontBuilder;
     type TextLayout = WebTextLayout;
     type TextLayoutBuilder = WebTextLayoutBuilder;
 
-    fn new_font_by_name(
-        &mut self,
-        name: &str,
-        size: impl RoundInto<Self::Coord>,
-    ) -> Result<Self::FontBuilder, Error> {
+    fn new_font_by_name(&mut self, name: &str, size: f64) -> Self::FontBuilder {
         let font = WebFont {
             family: name.to_owned(),
-            size: size.round_into(),
+            size,
             weight: 400,
             style: FontStyle::Normal,
         };
-        Ok(WebFontBuilder(font))
+        WebFontBuilder(font)
     }
 
-    fn new_text_layout(
-        &mut self,
-        font: &Self::Font,
-        text: &str,
-    ) -> Result<Self::TextLayoutBuilder, Error> {
-        Ok(WebTextLayoutBuilder {
+    fn new_text_layout(&mut self, font: &Self::Font, text: &str) -> Self::TextLayoutBuilder {
+        WebTextLayoutBuilder {
             // TODO: it's very likely possible to do this without cloning ctx, but
             // I couldn't figure out the lifetime errors from a `&'a` reference.
             ctx: self.ctx.clone(),
             font: font.clone(),
             text: text.to_owned(),
-        })
+        }
     }
 }
 
@@ -502,23 +535,147 @@ impl TextLayoutBuilder for WebTextLayoutBuilder {
 
     fn build(self) -> Result<Self::Out, Error> {
         self.ctx.set_font(&self.font.get_font_string());
-        let width = self
-            .ctx
-            .measure_text(&self.text)
-            .map(|m| m.width())
-            .wrap()?;
         Ok(WebTextLayout {
+            ctx: self.ctx,
             font: self.font,
             text: self.text,
-            width,
         })
     }
 }
 
 impl TextLayout for WebTextLayout {
-    type Coord = f64;
-
     fn width(&self) -> f64 {
-        self.width
+        //cairo:
+        //self.font.text_extents(&self.text).x_advance
+        self.ctx
+            .measure_text(&self.text)
+            .map(|m| m.width())
+            .expect("Text measurement failed")
+    }
+
+    // first assume one line.
+    // TODO do with lines
+    fn hit_test_point(&self, point: Point) -> HitTestPoint {
+        // internal logic is using grapheme clusters, but return the text position associated
+        // with the border of the grapheme cluster.
+
+        // null case
+        if self.text.len() == 0 {
+            return HitTestPoint::default();
+        }
+
+        // get bounds
+        // TODO handle if string is not null yet count is 0?
+        let end = UnicodeSegmentation::graphemes(self.text.as_str(), true).count() - 1;
+        let end_bounds = match self.get_grapheme_boundaries(end) {
+            Some(bounds) => bounds,
+            None => return HitTestPoint::default(),
+        };
+
+        let start = 0;
+        let start_bounds = match self.get_grapheme_boundaries(start) {
+            Some(bounds) => bounds,
+            None => return HitTestPoint::default(),
+        };
+
+        // first test beyond ends
+        if point.x > end_bounds.trailing {
+            let mut res = HitTestPoint::default();
+            res.metrics.text_position = self.text.len();
+            return res;
+        }
+        if point.x <= start_bounds.leading {
+            return HitTestPoint::default();
+        }
+
+        // then test the beginning and end (common cases)
+        if let Some(hit) = point_x_in_grapheme(point.x, &start_bounds) {
+            return hit;
+        }
+        if let Some(hit) = point_x_in_grapheme(point.x, &end_bounds) {
+            return hit;
+        }
+
+        // Now that we know it's not beginning or end, begin binary search.
+        // Iterative style
+        let mut left = start;
+        let mut right = end;
+        loop {
+            // pick halfway point
+            let middle = left + ((right - left) / 2);
+
+            let grapheme_bounds = match self.get_grapheme_boundaries(middle) {
+                Some(bounds) => bounds,
+                None => return HitTestPoint::default(),
+            };
+
+            if let Some(hit) = point_x_in_grapheme(point.x, &grapheme_bounds) {
+                return hit;
+            }
+
+            // since it's not a hit, check if closer to start or finish
+            // and move the appropriate search boundary
+            if point.x < grapheme_bounds.leading {
+                right = middle;
+            } else if point.x > grapheme_bounds.trailing {
+                left = middle + 1;
+            } else {
+                unreachable!("hit_test_point conditional is exhaustive");
+            }
+        }
+    }
+
+    fn hit_test_text_position(&self, text_position: usize) -> Option<HitTestTextPosition> {
+        // Using substrings, but now with unicode grapheme awareness
+
+        let text_len = self.text.len();
+
+        if text_position == 0 {
+            return Some(HitTestTextPosition::default());
+        }
+
+        if text_position as usize >= text_len {
+            let x = self.width();
+
+            return Some(HitTestTextPosition {
+                point: Point { x, y: 0.0 },
+                metrics: HitTestMetrics {
+                    text_position: text_len,
+                },
+            });
+        }
+
+        // Already checked that text_position > 0 and text_position < count.
+        // If text position is not at a grapheme boundary, use the text position of current
+        // grapheme cluster. But return the original text position
+        // Use the indices (byte offset, which for our purposes = utf8 code units).
+        let grapheme_indices = UnicodeSegmentation::grapheme_indices(self.text.as_str(), true)
+            .take_while(|(byte_idx, _s)| text_position >= *byte_idx);
+
+        if let Some((byte_idx, _s)) = grapheme_indices.last() {
+            let x = self
+                .ctx
+                .measure_text(&self.text[0..byte_idx])
+                .map(|m| m.width())
+                .expect("Text measurement failed");
+
+            Some(HitTestTextPosition {
+                point: Point { x, y: 0.0 },
+                metrics: HitTestMetrics {
+                    text_position: text_position,
+                },
+            })
+        } else {
+            // iterated to end boundary
+            Some(HitTestTextPosition {
+                point: Point {
+                    x: self.width(),
+                    y: 0.0,
+                },
+                metrics: HitTestMetrics {
+                    text_position: text_len,
+                },
+            })
+        }
     }
 }

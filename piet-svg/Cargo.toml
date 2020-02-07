@@ -1,23 +1,17 @@
 [package]
-name = "piet-direct2d"
+name = "piet-svg"
 version = "0.0.9"
-authors = ["Raph Levien <raph.levien@gmail.com>"]
-description = "Direct2D backend for piet 2D graphics abstraction."
+authors = ["Benjamin Saunders <ben.e.saunders@gmail.com>"]
+description = "SVG backend for piet 2D graphics abstraction."
+edition = "2018"
 license = "MIT/Apache-2.0"
 repository = "https://github.com/linebender/piet"
-edition = "2018"
 keywords = ["graphics", "2d"]
 categories = ["rendering::graphics-api"]
 
 [dependencies]
 piet = { version = "0.0.9", path = "../piet" }
-
-wio = "0.2.2"
-
-[dependencies.winapi]
-version = "0.3.8"
-features = [ "d2d1", "d2d1_1", "d3d11", "dxgi" ]
+svg = "0.6"
 
 [dev-dependencies]
-image = "0.22.1"
 piet-test = { version = "0.0.9", path = "../piet-test" }
