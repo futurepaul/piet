@@ -43,7 +43,6 @@ async fn run() {
         limits: wgpu::Limits::default(),
     });
 
-    // Rendered image is 256×256 with 32-bit RGBA color
     let width = 800u32;
     let height = 600u32;
 
@@ -70,7 +69,7 @@ async fn run() {
         usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT | wgpu::TextureUsage::COPY_SRC,
     });
 
-    let mut render_ctx = WgpuRenderContext::new(&device);
+    let mut render_ctx = WgpuRenderContext::new(&device, width, height);
 
     let now = std::time::Instant::now();
 

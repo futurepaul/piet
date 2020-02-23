@@ -16,6 +16,9 @@ use lyon::tessellation::{self, FillOptions, FillTessellator, StrokeOptions, Stro
 
 use zerocopy::AsBytes;
 
+// TODO: Query this from the device.
+const MSAA_SAMPLES: u32 = 4;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, AsBytes)]
 struct WgpuVertex {
@@ -87,12 +90,14 @@ struct WgpuCtx<'a> {
     clear_color: wgpu::Color,
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
+    msaa_texture: wgpu::Texture,
+    current_size: (u32, u32),
     transform_buffer: wgpu::Buffer,
     current_transform: [f32; 16],
 }
 
 impl WgpuCtx<'_> {
-    fn new(device: &wgpu::Device) -> WgpuCtx {
+    fn new(device: &wgpu::Device, width: u32, height: u32) -> WgpuCtx {
         let vs_bytes = include_bytes!("../shaders/geometry.vert.spv");
         let vs_spv = wgpu::read_spirv(std::io::Cursor::new(&vs_bytes[..])).unwrap();
         let vs_module = device.create_shader_module(&vs_spv);
@@ -117,6 +122,16 @@ impl WgpuCtx<'_> {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             bind_group_layouts: &[&bind_group_layout],
+        });
+
+        let msaa_texture = device.create_texture(&wgpu::TextureDescriptor {
+            size: wgpu::Extent3d { width, height, depth: 1 },
+            array_layer_count: 1,
+            mip_level_count: 1,
+            sample_count: MSAA_SAMPLES,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
         });
 
         let transform_buffer = device.create_buffer_with_data(IDENTITY_MATRIX.as_bytes(), wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST);
@@ -171,8 +186,7 @@ impl WgpuCtx<'_> {
                     },
                 ],
             }],
-            // TODO: MSAA?
-            sample_count: 1,
+            sample_count: MSAA_SAMPLES,
             sample_mask: !0,
             alpha_to_coverage_enabled: false,
         });
@@ -184,6 +198,8 @@ impl WgpuCtx<'_> {
             bind_group_layout,
             current_transform: IDENTITY_MATRIX,
             transform_buffer,
+            current_size: (width, height),
+            msaa_texture,
         }
     }
 }
@@ -194,11 +210,11 @@ pub struct WgpuRenderContext<'a> {
 }
 
 impl WgpuRenderContext<'_> {
-    pub fn new(device: &wgpu::Device) -> WgpuRenderContext {
+    pub fn new(device: &wgpu::Device, width: u32, height: u32) -> WgpuRenderContext {
 
         WgpuRenderContext {
             lyon_ctx: LyonCtx::new(),
-            wgpu_ctx: WgpuCtx::new(device),
+            wgpu_ctx: WgpuCtx::new(device, width, height),
         }
     }
 
@@ -245,10 +261,25 @@ impl WgpuRenderContext<'_> {
             ],
         });
 
+        if self.wgpu_ctx.current_size != (width, height) {
+            self.wgpu_ctx.current_size = (width, height);
+            self.wgpu_ctx.msaa_texture = self.wgpu_ctx.device.create_texture(&wgpu::TextureDescriptor {
+                size: wgpu::Extent3d { width, height, depth: 1 },
+                array_layer_count: 1,
+                mip_level_count: 1,
+                sample_count: MSAA_SAMPLES,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
+            });
+        }
+
+        let msaa_texture_view = self.wgpu_ctx.msaa_texture.create_default_view();
+
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-                attachment: texture,
-                resolve_target: None,
+                attachment: &msaa_texture_view,
+                resolve_target: Some(texture),
                 load_op: wgpu::LoadOp::Clear,
                 store_op: wgpu::StoreOp::Store,
                 clear_color: self.wgpu_ctx.clear_color,
