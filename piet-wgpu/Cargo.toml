@@ -7,7 +7,10 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-wgpu = { git="https://github.com/gfx-rs/wgpu-rs/"}
+wgpu = { git="https://github.com/gfx-rs/wgpu-rs/" }
 png = "0.15"
 futures = "0.3"
 env_logger = "0.7"
+lyon = "0.15.6"
+piet = { path="../piet" }
+zerocopy = "0.2"
