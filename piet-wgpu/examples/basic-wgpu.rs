@@ -83,7 +83,7 @@ async fn run() {
         render_ctx.fill(rect, &red_brush);
     }
 
-    let green_brush = render_ctx.solid_brush(Color::rgb8(0, 255, 0));
+    let green_brush = render_ctx.solid_brush(Color::rgba8(0, 255, 0, 125));
     let rect = piet::kurbo::RoundedRect::new(400.0, 500.0, 700.0, 550.0, 15.0);
     render_ctx.fill(rect, &green_brush);
 
