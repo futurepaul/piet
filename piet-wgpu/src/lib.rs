@@ -460,7 +460,7 @@ impl RenderContext for WgpuRenderContext<'_>
         // Tesselate and adds to mesh
         self.lyon_ctx.fill_tess.tessellate(
             &path,
-            &FillOptions::tolerance(0.0001),
+            &FillOptions::tolerance(0.01),
             &mut BuffersBuilder::new(
                 &mut self.lyon_ctx.mesh,
                 WgpuVertexCtor {

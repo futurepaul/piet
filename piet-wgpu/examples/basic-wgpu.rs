@@ -25,18 +25,6 @@ async fn run() {
         limits: wgpu::Limits::default(),
     });
 
-    let mut render_ctx = WgpuRenderContext::new(&device);
-
-    // draw stuff
-    render_ctx.clear(Color::rgb8(58, 165, 181));
-    let red_brush = render_ctx.solid_brush(Color::rgb8(255, 0, 0));
-    let rect = piet::kurbo::RoundedRect::new(10.0, 10.0, 300.0, 400.0, 10.0);
-    render_ctx.fill(rect, &red_brush);
-
-    let green_brush = render_ctx.solid_brush(Color::rgb8(255, 255, 0));
-    let rect = piet::kurbo::RoundedRect::new(400.0, 500.0, 700.0, 550.0, 15.0);
-    render_ctx.fill(rect, &green_brush);
-
     // Rendered image is 256×256 with 32-bit RGBA color
     let width = 800u32;
     let height = 600u32;
@@ -63,6 +51,22 @@ async fn run() {
         format: wgpu::TextureFormat::Rgba8UnormSrgb,
         usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT | wgpu::TextureUsage::COPY_SRC,
     });
+
+    let mut render_ctx = WgpuRenderContext::new(&device);
+
+    let now = std::time::Instant::now();
+
+    for _ in 0..100 {
+        // draw stuff
+        render_ctx.clear(Color::rgb8(58, 165, 181));
+        let red_brush = render_ctx.solid_brush(Color::rgb8(255, 0, 0));
+        let rect = piet::kurbo::RoundedRect::new(10.0, 10.0, 300.0, 400.0, 70.0);
+        render_ctx.fill(rect, &red_brush);
+
+        let green_brush = render_ctx.solid_brush(Color::rgb8(255, 255, 0));
+        let rect = piet::kurbo::RoundedRect::new(400.0, 500.0, 700.0, 550.0, 15.0);
+        render_ctx.fill(rect, &green_brush);
+    }
 
     // Set the background to be red
     let command_buffer = {
@@ -96,6 +100,8 @@ async fn run() {
 
     // Write the buffer as a PNG
     if let Ok(mapping) = output_buffer.map_read(0u64, (width * height) as u64 * size_of::<u32>() as u64).await {
+        let elapsed = now.elapsed();
+        println!("Frame took: {:?}", elapsed);
         let mut png_encoder = png::Encoder::new(File::create("output.png").unwrap(), width, height);
         png_encoder.set_depth(png::BitDepth::Eight);
         png_encoder.set_color(png::ColorType::RGBA);
