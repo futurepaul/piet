@@ -5,7 +5,25 @@ use std::fs::File;
 use std::mem::size_of;
 
 use piet::{Color, RenderContext};
+use piet::kurbo::{BezPath, Point, Rect, RoundedRect, Vec2};
 use piet_wgpu::WgpuRenderContext;
+
+// Note: this could be a Shape.
+fn star(center: Point, inner: f64, outer: f64, n: usize) -> BezPath {
+    let mut result = BezPath::new();
+    let d_th = std::f64::consts::PI / (n as f64);
+    for i in 0..n {
+        let outer_pt = center + outer * Vec2::from_angle(d_th * ((i * 2) as f64));
+        if i == 0 {
+            result.move_to(outer_pt);
+        } else {
+            result.line_to(outer_pt);
+        }
+        result.line_to(center + inner * Vec2::from_angle(d_th * ((i * 2 + 1) as f64)));
+    }
+    result.close_path();
+    result
+}
 
 async fn run() {
     env_logger::init();
@@ -56,17 +74,22 @@ async fn run() {
 
     let now = std::time::Instant::now();
 
-    for _ in 0..100 {
+    for i in 0..100 {
         // draw stuff
         render_ctx.clear(Color::rgb8(58, 165, 181));
         let red_brush = render_ctx.solid_brush(Color::rgb8(255, 0, 0));
-        let rect = piet::kurbo::RoundedRect::new(10.0, 10.0, 300.0, 400.0, 70.0);
+        let i = i as f64;
+        let rect = piet::kurbo::RoundedRect::new(i * 10.0, i * 10.0, i * 10.0 + 10.0, i * 10.0 + 10.0, 70.0);
         render_ctx.fill(rect, &red_brush);
-
-        let green_brush = render_ctx.solid_brush(Color::rgb8(255, 255, 0));
-        let rect = piet::kurbo::RoundedRect::new(400.0, 500.0, 700.0, 550.0, 15.0);
-        render_ctx.fill(rect, &green_brush);
     }
+
+    let green_brush = render_ctx.solid_brush(Color::rgb8(0, 255, 0));
+    let rect = piet::kurbo::RoundedRect::new(400.0, 500.0, 700.0, 550.0, 15.0);
+    render_ctx.fill(rect, &green_brush);
+
+    let yellow_brush = render_ctx.solid_brush(Color::rgb8(255, 255, 0));
+    let star_shape = star(Point::new(300.0, 100.0), 30.0, 70.0, 5);
+    render_ctx.fill(star_shape, &yellow_brush);
 
     // Set the background to be red
     let command_buffer = {
