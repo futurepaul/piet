@@ -1,18 +1,17 @@
 use std::borrow::Cow;
-use std::fmt;
 
-use piet::kurbo::{Affine, PathEl, Point as PietPoint, QuadBez, Rect, Shape};
+use piet::kurbo::{Affine, PathEl, Point as PietPoint, Rect, Shape};
 
 use piet::{
-    new_error, Color, Error, ErrorKind, FixedGradient, ImageFormat, InterpolationMode, IntoBrush,
-    LineCap, LineJoin, RenderContext, StrokeStyle, Text, TextLayout, HitTestPoint, HitTestTextPosition,
+    Color, Error, FixedGradient, ImageFormat, InterpolationMode, IntoBrush,
+    RenderContext, StrokeStyle, Text, TextLayout, HitTestPoint, HitTestTextPosition,
     Font, TextLayoutBuilder, FontBuilder,
 };
 
 use lyon::math::{point, Point};
-use lyon::path::{Path, PathEvent};
+use lyon::path::Path;
 use lyon::tessellation::geometry_builder::*;
-use lyon::tessellation::{self, FillOptions, FillTessellator, StrokeOptions, StrokeTessellator};
+use lyon::tessellation::{self, FillOptions, FillTessellator, StrokeOptions, StrokeTessellator, LineJoin, LineCap};
 
 use zerocopy::AsBytes;
 
@@ -39,6 +38,18 @@ struct WgpuVertexCtor {
 
 impl FillVertexConstructor<WgpuVertex> for WgpuVertexCtor {
     fn new_vertex(&mut self, position: Point, _: tessellation::FillAttributes) -> WgpuVertex {
+        assert!(!position.x.is_nan());
+        assert!(!position.y.is_nan());
+
+        WgpuVertex {
+            pos: position.to_array(),
+            prim_id: self.prim_id,
+        }
+    }
+}
+
+impl StrokeVertexConstructor<WgpuVertex> for WgpuVertexCtor {
+    fn new_vertex(&mut self, position: Point, _: tessellation::StrokeAttributes) -> WgpuVertex {
         assert!(!position.x.is_nan());
         assert!(!position.y.is_nan());
 
@@ -130,7 +141,7 @@ impl WgpuCtx<'_> {
             mip_level_count: 1,
             sample_count: MSAA_SAMPLES,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
         });
 
@@ -155,7 +166,7 @@ impl WgpuCtx<'_> {
             }),
             primitive_topology: wgpu::PrimitiveTopology::TriangleList,
             color_states: &[wgpu::ColorStateDescriptor {
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 color_blend: wgpu::BlendDescriptor {
                     src_factor: wgpu::BlendFactor::SrcAlpha,
                     dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
@@ -269,7 +280,7 @@ impl WgpuRenderContext<'_> {
                 mip_level_count: 1,
                 sample_count: MSAA_SAMPLES,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
             });
         }
@@ -420,6 +431,28 @@ fn shape_to_path(shape: impl Shape) -> Path {
     builder.build()
 }
 
+fn convert_stroke_style(style: &StrokeStyle, width: f32, tolerance: f32) -> StrokeOptions {
+    let line_join = match style.line_join.unwrap_or(piet::LineJoin::Miter) {
+        piet::LineJoin::Miter => LineJoin::Miter,
+        piet::LineJoin::Round => LineJoin::Round,
+        piet::LineJoin::Bevel => LineJoin::Bevel,
+    };
+
+    let line_cap = match style.line_cap.unwrap_or(piet::LineCap::Butt) {
+        piet::LineCap::Butt => LineCap::Butt,
+        piet::LineCap::Round => LineCap::Round,
+        piet::LineCap::Square => LineCap::Square,
+    };
+
+    let miter_limit = style.miter_limit.unwrap_or(10.0);
+
+    StrokeOptions::tolerance(tolerance)
+        .with_line_join(line_join)
+        .with_line_cap(line_cap)
+        .with_miter_limit(miter_limit as f32)
+        .with_line_width(width)
+}
+
 impl RenderContext for WgpuRenderContext<'_>
 {
     /// The type of a "brush".
@@ -466,11 +499,12 @@ impl RenderContext for WgpuRenderContext<'_>
     fn clear(&mut self, color: Color) {
         let (r, g, b, a) = split_rgba(color);
         self.wgpu_ctx.clear_color = wgpu::Color { r, g, b, a };
+        self.lyon_ctx = LyonCtx::new();
     }
 
     /// Stroke a shape.
     fn stroke(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>, width: f64) {
-      unimplemented!()
+        self.stroke_styled(shape, brush, width, &StrokeStyle::new());
     }
 
     /// Stroke a shape, with styled strokes.
@@ -481,7 +515,27 @@ impl RenderContext for WgpuRenderContext<'_>
         width: f64,
         style: &StrokeStyle,
     ) {
-      unimplemented!()
+        let path = shape_to_path(&shape);
+        let brush = brush.make_brush(self, || shape.bounding_box());
+        let stroke_opts = convert_stroke_style(style, width as f32, 0.01);
+        self.lyon_ctx.stroke_tess.tessellate(
+            &path,
+            &stroke_opts,
+            &mut BuffersBuilder::new(
+                &mut self.lyon_ctx.mesh,
+                WgpuVertexCtor {
+                    prim_id: self.lyon_ctx.primitives.len() as u32,
+                },
+            ),
+        );
+
+        match brush.as_ref() {
+            WgpuBrush::Solid(color) => {
+                self.lyon_ctx.primitives.push(WgpuPrimitive {
+                    color: [color.r as f32, color.g as f32, color.b as f32, color.a as f32],
+                });
+            }
+        }
     }
 
     /// Fill a shape, using non-zero fill rule.

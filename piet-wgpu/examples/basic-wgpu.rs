@@ -65,7 +65,7 @@ async fn run() {
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT | wgpu::TextureUsage::COPY_SRC,
     });
 
@@ -73,10 +73,11 @@ async fn run() {
 
     let now = std::time::Instant::now();
 
+    // draw stuff
+    render_ctx.clear(Color::rgb8(58, 165, 181));
+    let red_brush = render_ctx.solid_brush(Color::rgb8(255, 0, 0));
+
     for i in 0..100 {
-        // draw stuff
-        render_ctx.clear(Color::rgb8(58, 165, 181));
-        let red_brush = render_ctx.solid_brush(Color::rgb8(255, 0, 0));
         let i = i as f64;
         let rect = piet::kurbo::RoundedRect::new(i * 10.0, i * 10.0, i * 10.0 + 10.0, i * 10.0 + 10.0, 70.0);
         render_ctx.fill(rect, &red_brush);
@@ -88,9 +89,16 @@ async fn run() {
 
     let yellow_brush = render_ctx.solid_brush(Color::rgb8(255, 255, 0));
     let star_shape = star(Point::new(300.0, 100.0), 30.0, 70.0, 5);
-    render_ctx.fill(star_shape, &yellow_brush);
+    render_ctx.fill(&star_shape, &yellow_brush);
+    let black_brush = render_ctx.solid_brush(Color::rgb8(0, 0, 0));
+    render_ctx.stroke(&star_shape, &black_brush, 10.0);
 
-    // Set the background to be red
+    // TIGER
+    let x = 100.0;
+    let y = 100.0;
+    include!("tiger.rs");
+
+    // Render a frame
     let command_buffer = {
         let mut encoder =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { todo: 0 });
