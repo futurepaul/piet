@@ -1,3 +1,7 @@
+mod batch;
+
+use batch::BatchList;
+
 use std::borrow::Cow;
 
 use piet::kurbo::{Affine, PathEl, Point as PietPoint, Rect, Shape};
@@ -105,6 +109,7 @@ struct WgpuCtx<'a> {
     current_size: (u32, u32),
     transform_buffer: wgpu::Buffer,
     current_transform: [f32; 16],
+    batch_list: BatchList,
 }
 
 impl WgpuCtx<'_> {
@@ -211,6 +216,7 @@ impl WgpuCtx<'_> {
             transform_buffer,
             current_size: (width, height),
             msaa_texture,
+            batch_list: BatchList::new(),
         }
     }
 }
@@ -319,6 +325,15 @@ pub struct WgpuTextLayoutBuilder;
 #[derive(Clone)]
 pub enum WgpuBrush {
     Solid(wgpu::Color),
+}
+
+impl WgpuBrush {
+    fn is_solid(&self) -> bool {
+        match self {
+            WgpuBrush::Solid(..) => true,
+            _ => false
+        }
+    }
 }
 
 impl Font for WgpuFont {}
@@ -518,24 +533,19 @@ impl RenderContext for WgpuRenderContext<'_>
         let path = shape_to_path(&shape);
         let brush = brush.make_brush(self, || shape.bounding_box());
         let stroke_opts = convert_stroke_style(style, width as f32, 0.01);
+
+        let (mesh_buffer, prim_id) = self.wgpu_ctx.batch_list.request_mesh(&brush);
+
         self.lyon_ctx.stroke_tess.tessellate(
             &path,
             &stroke_opts,
             &mut BuffersBuilder::new(
-                &mut self.lyon_ctx.mesh,
+                mesh_buffer,
                 WgpuVertexCtor {
-                    prim_id: self.lyon_ctx.primitives.len() as u32,
+                    prim_id: prim_id,
                 },
             ),
         );
-
-        match brush.as_ref() {
-            WgpuBrush::Solid(color) => {
-                self.lyon_ctx.primitives.push(WgpuPrimitive {
-                    color: [color.r as f32, color.g as f32, color.b as f32, color.a as f32],
-                });
-            }
-        }
     }
 
     /// Fill a shape, using non-zero fill rule.
