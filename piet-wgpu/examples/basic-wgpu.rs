@@ -93,6 +93,14 @@ async fn run() {
     let black_brush = render_ctx.solid_brush(Color::rgb8(0, 0, 0));
     render_ctx.stroke(&star_shape, &black_brush, 10.0);
 
+    let gradient_brush = piet::LinearGradient::new(
+        piet::UnitPoint::TOP,
+        piet::UnitPoint::BOTTOM,
+        (Color::WHITE, Color::BLACK),
+    );
+    let rect = piet::kurbo::RoundedRect::new(400.0, 200.0, 300.0, 300.0, 15.0);
+    render_ctx.fill(rect, &gradient_brush);
+
     // TIGER
     let x = 100.0;
     let y = 100.0;

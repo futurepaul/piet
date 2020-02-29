@@ -1,6 +1,6 @@
 mod batch;
 
-use batch::BatchList;
+use batch::{BatchList, RenderPipelines};
 
 use std::borrow::Cow;
 
@@ -24,7 +24,7 @@ const MSAA_SAMPLES: u32 = 4;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, AsBytes)]
-struct WgpuVertex {
+pub struct WgpuVertex {
     pos: [f32; 2],
     prim_id: u32,
 }
@@ -100,46 +100,20 @@ fn orthographic_projection(width: f64, height: f64) -> [f32; 16] {
     ]
 }
 
-struct WgpuCtx<'a> {
-    device: &'a wgpu::Device,
-    clear_color: wgpu::Color,
-    pipeline: wgpu::RenderPipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
-    msaa_texture: wgpu::Texture,
-    current_size: (u32, u32),
-    transform_buffer: wgpu::Buffer,
-    current_transform: [f32; 16],
-    batch_list: BatchList,
+pub struct WgpuCtx<'a> {
+    pub device: &'a wgpu::Device,
+    pub clear_color: wgpu::Color,
+    pub msaa_texture: wgpu::Texture,
+    pub current_size: (u32, u32),
+    pub transform_buffer: wgpu::Buffer,
+    pub current_transform: [f32; 16],
+    pub batch_list: BatchList,
+    pub render_pipelines: RenderPipelines,
+    pub global_bind_group_layout: wgpu::BindGroupLayout,
 }
 
 impl WgpuCtx<'_> {
     fn new(device: &wgpu::Device, width: u32, height: u32) -> WgpuCtx {
-        let vs_bytes = include_bytes!("../shaders/geometry.vert.spv");
-        let vs_spv = wgpu::read_spirv(std::io::Cursor::new(&vs_bytes[..])).unwrap();
-        let vs_module = device.create_shader_module(&vs_spv);
-        let fs_bytes = include_bytes!("../shaders/geometry.frag.spv");
-        let fs_spv = wgpu::read_spirv(std::io::Cursor::new(&fs_bytes[..])).unwrap();
-        let fs_module = device.create_shader_module(&fs_spv);
-
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            bindings: &[
-                wgpu::BindGroupLayoutBinding {
-                    binding: 0,
-                    visibility: wgpu::ShaderStage::VERTEX,
-                    ty: wgpu::BindingType::UniformBuffer { dynamic: false },
-                },
-                wgpu::BindGroupLayoutBinding {
-                    binding: 1,
-                    visibility: wgpu::ShaderStage::VERTEX,
-                    ty: wgpu::BindingType::UniformBuffer { dynamic: false },
-                },
-            ],
-        });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            bind_group_layouts: &[&bind_group_layout],
-        });
-
         let msaa_texture = device.create_texture(&wgpu::TextureDescriptor {
             size: wgpu::Extent3d { width, height, depth: 1 },
             array_layer_count: 1,
@@ -152,71 +126,28 @@ impl WgpuCtx<'_> {
 
         let transform_buffer = device.create_buffer_with_data(IDENTITY_MATRIX.as_bytes(), wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST);
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            layout: &pipeline_layout,
-            vertex_stage: wgpu::ProgrammableStageDescriptor {
-                module: &vs_module,
-                entry_point: "main",
-            },
-            fragment_stage: Some(wgpu::ProgrammableStageDescriptor {
-                module: &fs_module,
-                entry_point: "main",
-            }),
-            rasterization_state: Some(wgpu::RasterizationStateDescriptor {
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: wgpu::CullMode::None,
-                depth_bias: 0,
-                depth_bias_slope_scale: 0.0,
-                depth_bias_clamp: 0.0,
-            }),
-            primitive_topology: wgpu::PrimitiveTopology::TriangleList,
-            color_states: &[wgpu::ColorStateDescriptor {
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                color_blend: wgpu::BlendDescriptor {
-                    src_factor: wgpu::BlendFactor::SrcAlpha,
-                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                    operation: wgpu::BlendOperation::Add,
-                },
-                alpha_blend: wgpu::BlendDescriptor {
-                    src_factor: wgpu::BlendFactor::One,
-                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                    operation: wgpu::BlendOperation::Add,
-                },
-                write_mask: wgpu::ColorWrite::ALL,
-            }],
-            depth_stencil_state: None,
-            index_format: wgpu::IndexFormat::Uint32,
-            vertex_buffers: &[wgpu::VertexBufferDescriptor {
-                stride: std::mem::size_of::<WgpuVertex>() as u64,
-                step_mode: wgpu::InputStepMode::Vertex,
-                attributes: &[
-                    wgpu::VertexAttributeDescriptor {
-                        offset: 0,
-                        format: wgpu::VertexFormat::Float2,
-                        shader_location: 0,
-                    },
-                    wgpu::VertexAttributeDescriptor {
-                        offset: 8,
-                        format: wgpu::VertexFormat::Uint,
-                        shader_location: 1,
-                    },
-                ],
-            }],
-            sample_count: MSAA_SAMPLES,
-            sample_mask: !0,
-            alpha_to_coverage_enabled: false,
+        let global_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            bindings: &[
+                wgpu::BindGroupLayoutBinding {
+                    binding: 0,
+                    visibility: wgpu::ShaderStage::VERTEX,
+                    ty: wgpu::BindingType::UniformBuffer { dynamic: false },
+                }
+            ]
         });
+
+        let render_pipelines = RenderPipelines::new(device, &global_bind_group_layout);
 
         WgpuCtx {
             device,
             clear_color: wgpu::Color::WHITE,
-            pipeline,
-            bind_group_layout,
             current_transform: IDENTITY_MATRIX,
             transform_buffer,
             current_size: (width, height),
             msaa_texture,
             batch_list: BatchList::new(),
+            render_pipelines,
+            global_bind_group_layout,
         }
     }
 }
@@ -236,13 +167,6 @@ impl WgpuRenderContext<'_> {
     }
 
     pub fn render(&mut self, encoder: &mut wgpu::CommandEncoder, texture: &wgpu::TextureView, width: u32, height: u32) {
-        // Create vertex and index buffers
-        let vbo = self.wgpu_ctx.device
-            .create_buffer_with_data(&self.lyon_ctx.mesh.vertices.as_bytes(), wgpu::BufferUsage::VERTEX);
-
-        let ibo = self.wgpu_ctx.device
-            .create_buffer_with_data(&self.lyon_ctx.mesh.indices.as_bytes(), wgpu::BufferUsage::INDEX);
-
         // Update the transform buffer
         let ortho_proj = orthographic_projection(width as f64, height as f64);
         if self.wgpu_ctx.current_transform != ortho_proj {
@@ -253,13 +177,9 @@ impl WgpuRenderContext<'_> {
             self.wgpu_ctx.current_transform = ortho_proj;
         }
 
-        // Create primitive ubo
-        let prim_buffer = self.wgpu_ctx.device
-            .create_buffer_with_data(&self.lyon_ctx.primitives.as_bytes(), wgpu::BufferUsage::UNIFORM);
-
         // Create bind group!
         let bind_group = self.wgpu_ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &self.wgpu_ctx.bind_group_layout,
+            layout: &self.wgpu_ctx.global_bind_group_layout,
             bindings: &[
                 wgpu::Binding {
                     binding: 0,
@@ -267,13 +187,6 @@ impl WgpuRenderContext<'_> {
                         buffer: &self.wgpu_ctx.transform_buffer,
                         range: 0..(16 * 4),
                     },
-                },
-                wgpu::Binding {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Buffer {
-                        buffer: &prim_buffer,
-                        range: 0..((self.lyon_ctx.primitives.len() * std::mem::size_of::<WgpuPrimitive>()) as u64),
-                    }
                 },
             ],
         });
@@ -293,6 +206,8 @@ impl WgpuRenderContext<'_> {
 
         let msaa_texture_view = self.wgpu_ctx.msaa_texture.create_default_view();
 
+        self.wgpu_ctx.batch_list.prepare_for_render(self.wgpu_ctx.device, encoder);
+
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
                 attachment: &msaa_texture_view,
@@ -304,15 +219,9 @@ impl WgpuRenderContext<'_> {
             depth_stencil_attachment: None,
         });
 
-        // Set pipeline
-        rpass.set_pipeline(&self.wgpu_ctx.pipeline);
-        // Set bind group
+        // Bind the global bind group
         rpass.set_bind_group(0, &bind_group, &[]);
-        // Set vertex & index buffers
-        rpass.set_index_buffer(&ibo, 0);
-        rpass.set_vertex_buffers(0, &[(&vbo, 0)]);
-        // Draw
-        rpass.draw_indexed(0..(self.lyon_ctx.mesh.indices.len() as u32), 0, 0..1);
+        self.wgpu_ctx.batch_list.render(&self.wgpu_ctx.render_pipelines, &mut rpass);
     }
 }
 
@@ -325,6 +234,7 @@ pub struct WgpuTextLayoutBuilder;
 #[derive(Clone)]
 pub enum WgpuBrush {
     Solid(wgpu::Color),
+    LinearGradient,
 }
 
 impl WgpuBrush {
@@ -332,6 +242,13 @@ impl WgpuBrush {
         match self {
             WgpuBrush::Solid(..) => true,
             _ => false
+        }
+    }
+
+    fn is_linear_gradient(&self) -> bool {
+        match self {
+            WgpuBrush::LinearGradient => true,
+            _ => false,
         }
     }
 }
@@ -505,7 +422,7 @@ impl RenderContext for WgpuRenderContext<'_>
 
     /// Create a new gradient brush.
     fn gradient(&mut self, gradient: impl Into<FixedGradient>) -> Result<Self::Brush, Error> {
-      unimplemented!()
+        Ok(WgpuBrush::LinearGradient)
     }
 
     /// Clear the canvas with the given color.
@@ -534,7 +451,11 @@ impl RenderContext for WgpuRenderContext<'_>
         let brush = brush.make_brush(self, || shape.bounding_box());
         let stroke_opts = convert_stroke_style(style, width as f32, 0.01);
 
-        let (mesh_buffer, prim_id) = self.wgpu_ctx.batch_list.request_mesh(&brush);
+        let (mesh_buffer, prim_id) = self.wgpu_ctx.batch_list.request_mesh(
+            &self.wgpu_ctx.device,
+            &self.wgpu_ctx.render_pipelines,
+            &brush
+        );
 
         self.lyon_ctx.stroke_tess.tessellate(
             &path,
@@ -552,25 +473,23 @@ impl RenderContext for WgpuRenderContext<'_>
     fn fill(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>) {
         let path = shape_to_path(&shape);
         let brush = brush.make_brush(self, || shape.bounding_box());
+        let (mesh_buffer, prim_id) = self.wgpu_ctx.batch_list.request_mesh(
+            &self.wgpu_ctx.device,
+            &self.wgpu_ctx.render_pipelines,
+            &brush
+        );
+
         // Tesselate and adds to mesh
         self.lyon_ctx.fill_tess.tessellate(
             &path,
             &FillOptions::tolerance(0.01),
             &mut BuffersBuilder::new(
-                &mut self.lyon_ctx.mesh,
+                mesh_buffer,
                 WgpuVertexCtor {
-                    prim_id: self.lyon_ctx.primitives.len() as u32,
+                    prim_id,
                 },
             ),
         );
-
-        match brush.as_ref() {
-            WgpuBrush::Solid(color) => {
-                self.lyon_ctx.primitives.push(WgpuPrimitive {
-                    color: [color.r as f32, color.g as f32, color.b as f32, color.a as f32],
-                });
-            }
-        }
     }
 
     /// Fill a shape, using even-odd fill rule
