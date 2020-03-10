@@ -4,8 +4,8 @@
 use std::fs::File;
 use std::mem::size_of;
 
-use piet::{Color, RenderContext};
 use piet::kurbo::{BezPath, Point, Rect, RoundedRect, Vec2};
+use piet::{Color, RenderContext};
 use piet_wgpu::WgpuRenderContext;
 
 // Note: this could be a Shape.
@@ -43,8 +43,8 @@ async fn run() {
         limits: wgpu::Limits::default(),
     });
 
-    let width = 800u32;
-    let height = 600u32;
+    let width = 4*800u32;
+    let height = 4*600u32;
 
     // The output buffer lets us retrieve the data as an array
     let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -79,7 +79,13 @@ async fn run() {
 
     for i in 0..100 {
         let i = i as f64;
-        let rect = piet::kurbo::RoundedRect::new(i * 10.0, i * 10.0, i * 10.0 + 10.0, i * 10.0 + 10.0, 70.0);
+        let rect = piet::kurbo::RoundedRect::new(
+            i * 10.0,
+            i * 10.0,
+            i * 10.0 + 10.0,
+            i * 10.0 + 10.0,
+            70.0,
+        );
         render_ctx.fill(rect, &red_brush);
     }
 
@@ -94,12 +100,31 @@ async fn run() {
     render_ctx.stroke(&star_shape, &black_brush, 10.0);
 
     let gradient_brush = piet::LinearGradient::new(
-        piet::UnitPoint::TOP,
-        piet::UnitPoint::BOTTOM,
-        (Color::WHITE, Color::BLACK),
+        piet::UnitPoint::TOP_LEFT,
+        piet::UnitPoint::BOTTOM_RIGHT,
+        (Color::WHITE, Color::rgb8(255, 0, 0), Color::BLACK),
     );
     let rect = piet::kurbo::RoundedRect::new(400.0, 200.0, 300.0, 300.0, 15.0);
     render_ctx.fill(rect, &gradient_brush);
+
+    let rainbow_brush = piet::LinearGradient::new(
+        piet::UnitPoint::TOP_LEFT,
+        piet::UnitPoint::BOTTOM_RIGHT,
+        vec![
+            piet::GradientStop { pos: 0.0, color: Color::rgb8(148, 0, 211) },
+            piet::GradientStop { pos: 0.17, color: Color::rgb8(75, 0, 130) },
+            piet::GradientStop { pos: 0.33, color: Color::rgb8(0, 0, 255) },
+            piet::GradientStop { pos: 0.5, color: Color::rgb8(0, 255, 0) },
+            piet::GradientStop { pos: 0.67, color: Color::rgb8(255, 255, 0) },
+            piet::GradientStop { pos: 0.83, color: Color::rgb8(255, 127, 0) },
+            piet::GradientStop { pos: 1.0, color: Color::rgb8(255, 0, 0) },
+        ],
+    );
+    let star_shape = star(Point::new(500.0, 400.0), 30.0, 70.0, 5);
+    render_ctx.fill(&star_shape, &rainbow_brush);
+
+    let rect = piet::kurbo::RoundedRect::new(600.0, 100.0, 500.0, 200.0, 15.0);
+    render_ctx.fill(rect, &rainbow_brush);
 
     // TIGER
     let x = 100.0;
@@ -137,7 +162,10 @@ async fn run() {
     queue.submit(&[command_buffer]);
 
     // Write the buffer as a PNG
-    if let Ok(mapping) = output_buffer.map_read(0u64, (width * height) as u64 * size_of::<u32>() as u64).await {
+    if let Ok(mapping) = output_buffer
+        .map_read(0u64, (width * height) as u64 * size_of::<u32>() as u64)
+        .await
+    {
         let elapsed = now.elapsed();
         println!("Frame took: {:?}", elapsed);
         let mut png_encoder = png::Encoder::new(File::create("output.png").unwrap(), width, height);

@@ -1,4 +1,7 @@
 mod batch;
+mod gradient;
+
+use gradient::{GradientStore, LinearGradient};
 
 use batch::{BatchList, RenderPipelines};
 
@@ -7,15 +10,16 @@ use std::borrow::Cow;
 use piet::kurbo::{Affine, PathEl, Point as PietPoint, Rect, Shape};
 
 use piet::{
-    Color, Error, FixedGradient, ImageFormat, InterpolationMode, IntoBrush,
-    RenderContext, StrokeStyle, Text, TextLayout, HitTestPoint, HitTestTextPosition,
-    Font, TextLayoutBuilder, FontBuilder,
+    Color, Error, FixedGradient, Font, FontBuilder, HitTestPoint, HitTestTextPosition, ImageFormat,
+    InterpolationMode, IntoBrush, RenderContext, StrokeStyle, Text, TextLayout, TextLayoutBuilder,
 };
 
 use lyon::math::{point, Point};
 use lyon::path::Path;
 use lyon::tessellation::geometry_builder::*;
-use lyon::tessellation::{self, FillOptions, FillTessellator, StrokeOptions, StrokeTessellator, LineJoin, LineCap};
+use lyon::tessellation::{
+    self, FillOptions, FillTessellator, LineCap, LineJoin, StrokeOptions, StrokeTessellator,
+};
 
 use zerocopy::AsBytes;
 
@@ -110,12 +114,17 @@ pub struct WgpuCtx<'a> {
     pub batch_list: BatchList,
     pub render_pipelines: RenderPipelines,
     pub global_bind_group_layout: wgpu::BindGroupLayout,
+    pub gradient_store: GradientStore,
 }
 
 impl WgpuCtx<'_> {
     fn new(device: &wgpu::Device, width: u32, height: u32) -> WgpuCtx {
         let msaa_texture = device.create_texture(&wgpu::TextureDescriptor {
-            size: wgpu::Extent3d { width, height, depth: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth: 1,
+            },
             array_layer_count: 1,
             mip_level_count: 1,
             sample_count: MSAA_SAMPLES,
@@ -124,17 +133,19 @@ impl WgpuCtx<'_> {
             usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
         });
 
-        let transform_buffer = device.create_buffer_with_data(IDENTITY_MATRIX.as_bytes(), wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST);
+        let transform_buffer = device.create_buffer_with_data(
+            IDENTITY_MATRIX.as_bytes(),
+            wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+        );
 
-        let global_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            bindings: &[
-                wgpu::BindGroupLayoutBinding {
+        let global_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                bindings: &[wgpu::BindGroupLayoutBinding {
                     binding: 0,
                     visibility: wgpu::ShaderStage::VERTEX,
                     ty: wgpu::BindingType::UniformBuffer { dynamic: false },
-                }
-            ]
-        });
+                }],
+            });
 
         let render_pipelines = RenderPipelines::new(device, &global_bind_group_layout);
 
@@ -148,6 +159,7 @@ impl WgpuCtx<'_> {
             batch_list: BatchList::new(),
             render_pipelines,
             global_bind_group_layout,
+            gradient_store: GradientStore::new(),
         }
     }
 }
@@ -159,54 +171,81 @@ pub struct WgpuRenderContext<'a> {
 
 impl WgpuRenderContext<'_> {
     pub fn new(device: &wgpu::Device, width: u32, height: u32) -> WgpuRenderContext {
-
         WgpuRenderContext {
             lyon_ctx: LyonCtx::new(),
             wgpu_ctx: WgpuCtx::new(device, width, height),
         }
     }
 
-    pub fn render(&mut self, encoder: &mut wgpu::CommandEncoder, texture: &wgpu::TextureView, width: u32, height: u32) {
+    pub fn render(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        texture: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+    ) {
         // Update the transform buffer
         let ortho_proj = orthographic_projection(width as f64, height as f64);
         if self.wgpu_ctx.current_transform != ortho_proj {
-            let temp_buffer = self.wgpu_ctx.device.create_buffer_with_data(ortho_proj.as_bytes(), wgpu::BufferUsage::COPY_SRC);
+            let temp_buffer = self
+                .wgpu_ctx
+                .device
+                .create_buffer_with_data(ortho_proj.as_bytes(), wgpu::BufferUsage::COPY_SRC);
 
-            encoder.copy_buffer_to_buffer(&temp_buffer, 0, &self.wgpu_ctx.transform_buffer, 0, 16 * 4);
+            encoder.copy_buffer_to_buffer(
+                &temp_buffer,
+                0,
+                &self.wgpu_ctx.transform_buffer,
+                0,
+                16 * 4,
+            );
 
             self.wgpu_ctx.current_transform = ortho_proj;
         }
 
         // Create bind group!
-        let bind_group = self.wgpu_ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &self.wgpu_ctx.global_bind_group_layout,
-            bindings: &[
-                wgpu::Binding {
+        let bind_group = self
+            .wgpu_ctx
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                layout: &self.wgpu_ctx.global_bind_group_layout,
+                bindings: &[wgpu::Binding {
                     binding: 0,
                     resource: wgpu::BindingResource::Buffer {
                         buffer: &self.wgpu_ctx.transform_buffer,
                         range: 0..(16 * 4),
                     },
-                },
-            ],
-        });
+                }],
+            });
 
         if self.wgpu_ctx.current_size != (width, height) {
             self.wgpu_ctx.current_size = (width, height);
-            self.wgpu_ctx.msaa_texture = self.wgpu_ctx.device.create_texture(&wgpu::TextureDescriptor {
-                size: wgpu::Extent3d { width, height, depth: 1 },
-                array_layer_count: 1,
-                mip_level_count: 1,
-                sample_count: MSAA_SAMPLES,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
-            });
+            self.wgpu_ctx.msaa_texture =
+                self.wgpu_ctx
+                    .device
+                    .create_texture(&wgpu::TextureDescriptor {
+                        size: wgpu::Extent3d {
+                            width,
+                            height,
+                            depth: 1,
+                        },
+                        array_layer_count: 1,
+                        mip_level_count: 1,
+                        sample_count: MSAA_SAMPLES,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
+                    });
         }
 
         let msaa_texture_view = self.wgpu_ctx.msaa_texture.create_default_view();
 
-        self.wgpu_ctx.batch_list.prepare_for_render(self.wgpu_ctx.device, encoder);
+        self.wgpu_ctx.batch_list.prepare_for_render(
+            self.wgpu_ctx.device,
+            encoder,
+            &self.wgpu_ctx.render_pipelines,
+            &mut self.wgpu_ctx.gradient_store,
+        );
 
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
@@ -221,7 +260,9 @@ impl WgpuRenderContext<'_> {
 
         // Bind the global bind group
         rpass.set_bind_group(0, &bind_group, &[]);
-        self.wgpu_ctx.batch_list.render(&self.wgpu_ctx.render_pipelines, &mut rpass);
+        self.wgpu_ctx
+            .batch_list
+            .render(&self.wgpu_ctx.render_pipelines, &mut rpass);
     }
 }
 
@@ -234,20 +275,20 @@ pub struct WgpuTextLayoutBuilder;
 #[derive(Clone)]
 pub enum WgpuBrush {
     Solid(wgpu::Color),
-    LinearGradient,
+    LinearGradient(LinearGradient),
 }
 
 impl WgpuBrush {
     fn is_solid(&self) -> bool {
         match self {
             WgpuBrush::Solid(..) => true,
-            _ => false
+            _ => false,
         }
     }
 
     fn is_linear_gradient(&self) -> bool {
         match self {
-            WgpuBrush::LinearGradient => true,
+            WgpuBrush::LinearGradient(..) => true,
             _ => false,
         }
     }
@@ -288,7 +329,11 @@ impl Text for WgpuText {
 }
 
 impl IntoBrush<WgpuRenderContext<'_>> for WgpuBrush {
-    fn make_brush(&self, _piet: &mut WgpuRenderContext, _bbox: impl FnOnce() -> Rect) -> std::borrow::Cow<WgpuBrush> {
+    fn make_brush(
+        &self,
+        _piet: &mut WgpuRenderContext,
+        _bbox: impl FnOnce() -> Rect,
+    ) -> std::borrow::Cow<WgpuBrush> {
         Cow::Borrowed(self)
     }
 }
@@ -307,7 +352,7 @@ impl TextLayout for WgpuTextLayout {
     }
 }
 
-fn split_rgba(rgba: Color) -> (f64, f64, f64, f64) {
+pub fn split_rgba(rgba: &Color) -> (f64, f64, f64, f64) {
     let rgba = rgba.as_rgba_u32();
     (
         (rgba >> 24) as f64 / 255.0,
@@ -329,7 +374,10 @@ fn to_point<P: piet::RoundInto<WgpuPoint>>(p: P) -> WgpuPoint {
 
 impl piet::RoundFrom<PietPoint> for WgpuPoint {
     fn round_from(point: PietPoint) -> WgpuPoint {
-        WgpuPoint { x: point.x as f32, y: point.y as f32 }
+        WgpuPoint {
+            x: point.x as f32,
+            y: point.y as f32,
+        }
     }
 }
 
@@ -385,8 +433,7 @@ fn convert_stroke_style(style: &StrokeStyle, width: f32, tolerance: f32) -> Stro
         .with_line_width(width)
 }
 
-impl RenderContext for WgpuRenderContext<'_>
-{
+impl RenderContext for WgpuRenderContext<'_> {
     /// The type of a "brush".
     ///
     /// Represents solid colors and gradients.
@@ -405,7 +452,7 @@ impl RenderContext for WgpuRenderContext<'_>
     /// asynchronously after the drawing command was issued. This method reports
     /// any such error that has been detected.
     fn status(&mut self) -> Result<(), Error> {
-      unimplemented!()
+        unimplemented!()
     }
 
     /// Create a new brush resource.
@@ -416,20 +463,27 @@ impl RenderContext for WgpuRenderContext<'_>
     /// render target is rebuilt. Solid brushes are super lightweight, but
     /// other potentially retained objects will be heavier.
     fn solid_brush(&mut self, color: Color) -> Self::Brush {
-        let (r, g, b, a) = split_rgba(color);
-        WgpuBrush::Solid(wgpu::Color{ r, g, b, a })
+        let (r, g, b, a) = split_rgba(&color);
+        WgpuBrush::Solid(wgpu::Color { r, g, b, a })
     }
 
     /// Create a new gradient brush.
     fn gradient(&mut self, gradient: impl Into<FixedGradient>) -> Result<Self::Brush, Error> {
-        Ok(WgpuBrush::LinearGradient)
+        let gradient: FixedGradient = gradient.into();
+        let linear_gradient = match gradient {
+            FixedGradient::Linear(linear) => linear,
+            _ => unimplemented!(),
+        };
+        Ok(WgpuBrush::LinearGradient(LinearGradient::from(
+            linear_gradient,
+        )))
     }
 
     /// Clear the canvas with the given color.
     ///
     /// Note: only opaque colors are meaningful.
     fn clear(&mut self, color: Color) {
-        let (r, g, b, a) = split_rgba(color);
+        let (r, g, b, a) = split_rgba(&color);
         self.wgpu_ctx.clear_color = wgpu::Color { r, g, b, a };
         self.lyon_ctx = LyonCtx::new();
     }
@@ -454,18 +508,13 @@ impl RenderContext for WgpuRenderContext<'_>
         let (mesh_buffer, prim_id) = self.wgpu_ctx.batch_list.request_mesh(
             &self.wgpu_ctx.device,
             &self.wgpu_ctx.render_pipelines,
-            &brush
+            &brush,
         );
 
         self.lyon_ctx.stroke_tess.tessellate(
             &path,
             &stroke_opts,
-            &mut BuffersBuilder::new(
-                mesh_buffer,
-                WgpuVertexCtor {
-                    prim_id: prim_id,
-                },
-            ),
+            &mut BuffersBuilder::new(mesh_buffer, WgpuVertexCtor { prim_id: prim_id }),
         );
     }
 
@@ -476,25 +525,20 @@ impl RenderContext for WgpuRenderContext<'_>
         let (mesh_buffer, prim_id) = self.wgpu_ctx.batch_list.request_mesh(
             &self.wgpu_ctx.device,
             &self.wgpu_ctx.render_pipelines,
-            &brush
+            &brush,
         );
 
         // Tesselate and adds to mesh
         self.lyon_ctx.fill_tess.tessellate(
             &path,
             &FillOptions::tolerance(0.01),
-            &mut BuffersBuilder::new(
-                mesh_buffer,
-                WgpuVertexCtor {
-                    prim_id,
-                },
-            ),
+            &mut BuffersBuilder::new(mesh_buffer, WgpuVertexCtor { prim_id }),
         );
     }
 
     /// Fill a shape, using even-odd fill rule
     fn fill_even_odd(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>) {
-      unimplemented!()
+        unimplemented!()
     }
 
     /// Clip to a shape.
@@ -502,11 +546,11 @@ impl RenderContext for WgpuRenderContext<'_>
     /// All subsequent drawing operations up to the next [`restore`](#method.restore)
     /// are clipped by the shape.
     fn clip(&mut self, shape: impl Shape) {
-      unimplemented!()
+        unimplemented!()
     }
 
     fn text(&mut self) -> &mut Self::Text {
-      unimplemented!()
+        unimplemented!()
     }
 
     /// Draw a text layout.
@@ -519,7 +563,7 @@ impl RenderContext for WgpuRenderContext<'_>
         pos: impl Into<PietPoint>,
         brush: &impl IntoBrush<Self>,
     ) {
-      unimplemented!()
+        unimplemented!()
     }
 
     /// Save the context state.
@@ -533,7 +577,7 @@ impl RenderContext for WgpuRenderContext<'_>
     /// The context state currently consists of a clip region and an affine
     /// transform, but is expected to grow in the near future.
     fn save(&mut self) -> Result<(), Error> {
-      unimplemented!()
+        unimplemented!()
     }
 
     /// Restore the context state.
@@ -541,7 +585,7 @@ impl RenderContext for WgpuRenderContext<'_>
     /// Pop a context state that was pushed by [`save`](#method.save). See
     /// that method for details.
     fn restore(&mut self) -> Result<(), Error> {
-      unimplemented!()
+        unimplemented!()
     }
 
     /// Finish any pending operations.
@@ -559,7 +603,7 @@ impl RenderContext for WgpuRenderContext<'_>
     /// Apply an affine transformation. The transformation remains in effect
     /// until a [`restore`](#method.restore) operation.
     fn transform(&mut self, transform: Affine) {
-      unimplemented!()
+        unimplemented!()
     }
 
     /// Create a new image from a pixel buffer.
@@ -570,19 +614,24 @@ impl RenderContext for WgpuRenderContext<'_>
         buf: &[u8],
         format: ImageFormat,
     ) -> Result<Self::Image, Error> {
-      unimplemented!()
+        unimplemented!()
     }
 
     /// Draw an image.
     ///
     /// The image is scaled to the provided `rect`. It will be squashed if
     /// aspect ratios don't match.
-    fn draw_image(&mut self, image: &Self::Image, rect: impl Into<Rect>, interp: InterpolationMode) {
-      unimplemented!()
+    fn draw_image(
+        &mut self,
+        image: &Self::Image,
+        rect: impl Into<Rect>,
+        interp: InterpolationMode,
+    ) {
+        unimplemented!()
     }
 
     /// Returns the transformations currently applied to the context.
     fn current_transform(&self) -> Affine {
-      unimplemented!()
+        unimplemented!()
     }
 }

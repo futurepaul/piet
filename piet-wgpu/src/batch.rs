@@ -1,5 +1,8 @@
+use crate::{
+    gradient::{GradientHandle, GradientStore},
+    WgpuBrush, WgpuCtx, WgpuVertex, MSAA_SAMPLES,
+};
 use lyon::tessellation::geometry_builder::*;
-use crate::{WgpuCtx, WgpuVertex, WgpuBrush, MSAA_SAMPLES};
 use zerocopy::AsBytes;
 
 pub struct RenderPipelines {
@@ -10,7 +13,10 @@ pub struct RenderPipelines {
 }
 
 impl RenderPipelines {
-    pub fn new(device: &wgpu::Device, global_bind_group_layout: &wgpu::BindGroupLayout) -> RenderPipelines {
+    pub fn new(
+        device: &wgpu::Device,
+        global_bind_group_layout: &wgpu::BindGroupLayout,
+    ) -> RenderPipelines {
         let (solid_pipeline, solid_bind_group_layout) = {
             let vs_bytes = include_bytes!("../shaders/solid.vert.spv");
             let vs_spv = wgpu::read_spirv(std::io::Cursor::new(&vs_bytes[..])).unwrap();
@@ -19,15 +25,14 @@ impl RenderPipelines {
             let fs_spv = wgpu::read_spirv(std::io::Cursor::new(&fs_bytes[..])).unwrap();
             let fs_module = device.create_shader_module(&fs_spv);
 
-            let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                bindings: &[
-                    wgpu::BindGroupLayoutBinding {
+            let bind_group_layout =
+                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    bindings: &[wgpu::BindGroupLayoutBinding {
                         binding: 0,
                         visibility: wgpu::ShaderStage::VERTEX,
                         ty: wgpu::BindingType::UniformBuffer { dynamic: false },
-                    },
-                ],
-            });
+                    }],
+                });
 
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 bind_group_layouts: &[global_bind_group_layout, &bind_group_layout],
@@ -98,15 +103,29 @@ impl RenderPipelines {
             let fs_spv = wgpu::read_spirv(std::io::Cursor::new(&fs_bytes[..])).unwrap();
             let fs_module = device.create_shader_module(&fs_spv);
 
-            let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                bindings: &[
-                    wgpu::BindGroupLayoutBinding {
-                        binding: 0,
-                        visibility: wgpu::ShaderStage::VERTEX,
-                        ty: wgpu::BindingType::UniformBuffer { dynamic: false },
-                    },
-                ],
-            });
+            let bind_group_layout =
+                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    bindings: &[
+                        wgpu::BindGroupLayoutBinding {
+                            binding: 0,
+                            visibility: wgpu::ShaderStage::VERTEX | wgpu::ShaderStage::FRAGMENT,
+                            ty: wgpu::BindingType::UniformBuffer { dynamic: false },
+                        },
+                        wgpu::BindGroupLayoutBinding {
+                            binding: 1,
+                            visibility: wgpu::ShaderStage::FRAGMENT,
+                            ty: wgpu::BindingType::SampledTexture {
+                                multisampled: false,
+                                dimension: wgpu::TextureViewDimension::D1,
+                            },
+                        },
+                        wgpu::BindGroupLayoutBinding {
+                            binding: 2,
+                            visibility: wgpu::ShaderStage::FRAGMENT,
+                            ty: wgpu::BindingType::Sampler,
+                        },
+                    ],
+                });
 
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 bind_group_layouts: &[global_bind_group_layout, &bind_group_layout],
@@ -189,13 +208,21 @@ impl BatchList {
         }
     }
 
-    pub fn request_mesh(&mut self, device: &wgpu::Device, pipelines: &RenderPipelines, brush: &WgpuBrush) -> (&mut VertexBuffers<WgpuVertex, u32>, u32) {
-        let has_compatible_batch = self.batches.last()
+    pub fn request_mesh(
+        &mut self,
+        device: &wgpu::Device,
+        pipelines: &RenderPipelines,
+        brush: &WgpuBrush,
+    ) -> (&mut VertexBuffers<WgpuVertex, u32>, u32) {
+        let has_compatible_batch = self
+            .batches
+            .last()
             .map(|batch| batch.kind.is_compatible_with_brush(brush))
             .unwrap_or(false);
 
         if !has_compatible_batch {
-            self.batches.push(Batch::new_for_brush(brush, device, pipelines));
+            self.batches
+                .push(Batch::new_for_brush(brush, device, pipelines));
         }
 
         // Now we have a compatible batch at the top of the batch stack
@@ -204,26 +231,43 @@ impl BatchList {
         match (&mut batch.kind, brush) {
             (BatchKind::Solid(batch_info), WgpuBrush::Solid(color)) => {
                 batch_info.primitives.push(SolidPrimitive {
-                    color: [color.r as f32, color.g as f32, color.b as f32, color.a as f32],
+                    color: [
+                        color.r as f32,
+                        color.g as f32,
+                        color.b as f32,
+                        color.a as f32,
+                    ],
                 });
-                (&mut batch_info.mesh, (batch_info.primitives.len() - 1) as u32)
+                (
+                    &mut batch_info.mesh,
+                    (batch_info.primitives.len() - 1) as u32,
+                )
             }
-            (BatchKind::LinearGradient(batch_info), WgpuBrush::LinearGradient) => {
+            (BatchKind::LinearGradient(batch_info), WgpuBrush::LinearGradient(gradient)) => {
                 batch_info.primitives.push(LinearGradientPrimitive {
-                    color: [1.0, 0.0, 0.0, 1.0],
+                    start: [gradient.start.x as f32, gradient.start.y as f32],
+                    end: [gradient.end.x as f32, gradient.end.y as f32],
                 });
-                (&mut batch_info.mesh, (batch_info.primitives.len() - 1) as u32)
+                (
+                    &mut batch_info.mesh,
+                    (batch_info.primitives.len() - 1) as u32,
+                )
             }
             _ => panic!("Tried to add to invalid batch"),
         }
     }
 
-    pub fn prepare_for_render(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
-        for batch in &self.batches {
-            batch.prepare_for_render(device, encoder);
+    pub fn prepare_for_render(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &RenderPipelines,
+        gradient_store: &mut GradientStore,
+    ) {
+        for batch in &mut self.batches {
+            batch.prepare_for_render(device, encoder, pipelines, gradient_store);
         }
     }
-
 
     pub fn render<'a>(&'a self, pipelines: &'a RenderPipelines, rpass: &mut wgpu::RenderPass<'a>) {
         for batch in &self.batches {
@@ -231,8 +275,6 @@ impl BatchList {
         }
     }
 }
-
-// pub struct GradientHandle;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, AsBytes)]
@@ -243,7 +285,8 @@ pub struct SolidPrimitive {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, AsBytes)]
 pub struct LinearGradientPrimitive {
-    color: [f32; 4],
+    start: [f32; 2],
+    end: [f32; 2],
 }
 
 pub struct Batch {
@@ -251,24 +294,39 @@ pub struct Batch {
 }
 
 impl Batch {
-    fn new_for_brush(brush: &WgpuBrush, device: &wgpu::Device, pipelines: &RenderPipelines) -> Batch {
+    fn new_for_brush(
+        brush: &WgpuBrush,
+        device: &wgpu::Device,
+        pipelines: &RenderPipelines,
+    ) -> Batch {
         match brush {
             WgpuBrush::Solid(..) => Batch {
                 kind: BatchKind::Solid(SolidBatch::new(device, pipelines)),
             },
-            WgpuBrush::LinearGradient => Batch {
-                kind: BatchKind::LinearGradient(LinearGradientBatch::new(device, pipelines)),
+            WgpuBrush::LinearGradient(gradient) => Batch {
+                kind: BatchKind::LinearGradient(LinearGradientBatch::new(
+                    device,
+                    pipelines,
+                    gradient.handle.clone(),
+                )),
+            },
+        }
+    }
+
+    fn prepare_for_render(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &RenderPipelines,
+        gradient_store: &mut GradientStore,
+    ) {
+        match &mut self.kind {
+            BatchKind::Solid(batch) => batch.prepare_for_render(device, encoder),
+            BatchKind::LinearGradient(batch) => {
+                batch.prepare_for_render(device, encoder, pipelines, gradient_store)
             }
         }
     }
-
-    fn prepare_for_render(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
-        match &self.kind {
-            BatchKind::Solid(batch) => batch.prepare_for_render(device, encoder),
-            BatchKind::LinearGradient(batch) => batch.prepare_for_render(device, encoder),
-        }
-    }
-
 
     pub fn render<'a>(&'a self, pipelines: &'a RenderPipelines, rpass: &mut wgpu::RenderPass<'a>) {
         match &self.kind {
@@ -288,7 +346,16 @@ impl BatchKind {
         match self {
             BatchKind::Solid(..) => brush.is_solid(),
             // TODO: Check color!
-            BatchKind::LinearGradient(batch) => brush.is_linear_gradient(),
+            BatchKind::LinearGradient(batch) => {
+                if !brush.is_linear_gradient() {
+                    return false;
+                }
+                let gradient_handle = match brush {
+                    WgpuBrush::LinearGradient(gradient) => &gradient.handle,
+                    _ => unreachable!(),
+                };
+                &batch.gradient_handle == gradient_handle
+            },
         }
     }
 }
@@ -318,7 +385,8 @@ impl SolidBatch {
             usage: wgpu::BufferUsage::INDEX | wgpu::BufferUsage::COPY_DST,
         });
 
-        let prim_buffer_size = (MAX_PRIM_BUFFER_SIZE * std::mem::size_of::<SolidPrimitive>()) as u64;
+        let prim_buffer_size =
+            (MAX_PRIM_BUFFER_SIZE * std::mem::size_of::<SolidPrimitive>()) as u64;
         let prim_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             size: prim_buffer_size,
             usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
@@ -326,15 +394,13 @@ impl SolidBatch {
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &pipelines.solid_bind_group_layout,
-            bindings: &[
-                wgpu::Binding {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer {
-                        buffer: &prim_buffer,
-                        range: 0..prim_buffer_size,
-                    }
-                }
-            ]
+            bindings: &[wgpu::Binding {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer {
+                    buffer: &prim_buffer,
+                    range: 0..prim_buffer_size,
+                },
+            }],
         });
 
         SolidBatch {
@@ -347,7 +413,7 @@ impl SolidBatch {
         }
     }
 
-    fn prepare_for_render(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
+    fn prepare_for_render(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
         assert!(self.mesh.vertices.len() < MAX_VERTEX_BUFFER_SIZE);
         let temp_buffer = device.create_buffer_with_data(
             &self.mesh.vertices.as_bytes(),
@@ -404,14 +470,23 @@ impl SolidBatch {
 pub struct LinearGradientBatch {
     mesh: VertexBuffers<WgpuVertex, u32>,
     primitives: Vec<LinearGradientPrimitive>,
+    gradient_handle: GradientHandle,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     prim_buffer: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
+    sampler: wgpu::Sampler,
+
+    // Will be filled in during prepare for render
+    bind_group: Option<wgpu::BindGroup>,
+    gradient_view: Option<wgpu::TextureView>,
 }
 
 impl LinearGradientBatch {
-    fn new(device: &wgpu::Device, pipelines: &RenderPipelines) -> LinearGradientBatch {
+    fn new(
+        device: &wgpu::Device,
+        pipelines: &RenderPipelines,
+        gradient_handle: GradientHandle,
+    ) -> LinearGradientBatch {
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             size: (MAX_VERTEX_BUFFER_SIZE * std::mem::size_of::<WgpuVertex>()) as u64,
             usage: wgpu::BufferUsage::VERTEX | wgpu::BufferUsage::COPY_DST,
@@ -422,37 +497,74 @@ impl LinearGradientBatch {
             usage: wgpu::BufferUsage::INDEX | wgpu::BufferUsage::COPY_DST,
         });
 
-        let prim_buffer_size = (MAX_PRIM_BUFFER_SIZE * std::mem::size_of::<SolidPrimitive>()) as u64;
+        let prim_buffer_size =
+            (MAX_PRIM_BUFFER_SIZE * std::mem::size_of::<SolidPrimitive>()) as u64;
         let prim_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             size: prim_buffer_size,
             usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
         });
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &pipelines.linear_gradient_bind_group_layout,
-            bindings: &[
-                wgpu::Binding {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer {
-                        buffer: &prim_buffer,
-                        range: 0..prim_buffer_size,
-                    }
-                }
-            ]
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            lod_min_clamp: -100.0,
+            lod_max_clamp: 100.0,
+            compare_function: wgpu::CompareFunction::Always,
         });
 
         LinearGradientBatch {
             mesh: VertexBuffers::new(),
             primitives: Vec::new(),
+            gradient_handle,
+            sampler,
             vertex_buffer,
             index_buffer,
             prim_buffer,
-            bind_group,
+            bind_group: None,
+            gradient_view: None,
         }
     }
 
-    fn prepare_for_render(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
+    fn prepare_for_render(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &RenderPipelines,
+        gradient_store: &mut GradientStore,
+    ) {
         assert!(self.mesh.vertices.len() < MAX_VERTEX_BUFFER_SIZE);
+        let prim_buffer_size =
+            (MAX_PRIM_BUFFER_SIZE * std::mem::size_of::<SolidPrimitive>()) as u64;
+
+        let gradient = gradient_store.get_texture(device, encoder, &self.gradient_handle);
+        self.gradient_view = Some(gradient.create_default_view());
+        self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &pipelines.linear_gradient_bind_group_layout,
+            bindings: &[
+                wgpu::Binding {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer {
+                        buffer: &self.prim_buffer,
+                        range: 0..prim_buffer_size,
+                    },
+                },
+                wgpu::Binding {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(
+                        self.gradient_view.as_ref().unwrap(),
+                    ),
+                },
+                wgpu::Binding {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        }));
+
         let temp_buffer = device.create_buffer_with_data(
             &self.mesh.vertices.as_bytes(),
             wgpu::BufferUsage::VERTEX | wgpu::BufferUsage::COPY_SRC,
@@ -498,7 +610,7 @@ impl LinearGradientBatch {
     pub fn render<'a>(&'a self, pipelines: &'a RenderPipelines, rpass: &mut wgpu::RenderPass<'a>) {
         rpass.set_pipeline(&pipelines.linear_gradient_pipeline);
         // Bind the info needed for this batch
-        rpass.set_bind_group(1, &self.bind_group, &[]);
+        rpass.set_bind_group(1, self.bind_group.as_ref().unwrap(), &[]);
         rpass.set_index_buffer(&self.index_buffer, 0);
         rpass.set_vertex_buffers(0, &[(&self.vertex_buffer, 0)]);
         rpass.draw_indexed(0..(self.mesh.indices.len() as u32), 0, 0..1);
